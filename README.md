@@ -53,9 +53,9 @@ The current public API is intentionally narrower than the frontend's direct Supa
 
 ## Documents
 
-- [`docs/spec.md`](/opt/openclaw/projects/r2d2/refhub-skill/docs/spec.md)
-- [`docs/api-mapping.md`](/opt/openclaw/projects/r2d2/refhub-skill/docs/api-mapping.md)
-- [`docs/roadmap.md`](/opt/openclaw/projects/r2d2/refhub-skill/docs/roadmap.md)
+- [`docs/spec.md`](./docs/spec.md)
+- [`docs/api-mapping.md`](./docs/api-mapping.md)
+- [`docs/roadmap.md`](./docs/roadmap.md)
 
 ## Recommended initial repo structure
 
