@@ -1,168 +1,288 @@
 ---
 name: refhub-skill
-description: Use when an agent needs to work with RefHub vaults through the public RefHub API using an existing API key. Supports vault lifecycle (create, update, delete, visibility, shares), tag and relation CRUD, item add/update/delete/upsert, DOI/BibTeX/URL import, vault search and stats, audit log reads, and export. Also use when checking whether a requested RefHub workflow is supported by the current public API. Do not use for Supabase-direct product internals, API-key management flows requiring a human session JWT, or features explicitly noted as outside the API surface.
+description: Use when an agent needs to read, write, organize, import, search, export, or audit content in RefHub vaults using a pre-issued RefHub API key. Covers the full v2 public API surface. Do not use for API key creation/revocation, Google Drive management, Semantic Scholar lookups, or any flow that requires a human Supabase session JWT.
 ---
 
 # RefHub Skill
 
-This skill is the agent-facing workflow layer over the RefHub public API (v2).
+Agent-facing runtime skill for the RefHub public API (v2). All workflows execute over HTTP using a scoped API key. No local state, no Supabase direct access, no invented behavior.
 
-Use it to do real work against the current API without pretending unsupported product capabilities exist.
+> **Status:** This repo is spec-only. No SDK or library implementation exists yet. Agents operate by following this document directly.
 
-## Use this skill for
+---
 
-**Vault lifecycle** (requires `vaults:admin` scope)
-- creating, updating metadata, and deleting vaults
-- setting vault visibility (`private` / `protected` / `public`)
-- listing, adding, updating, and removing vault collaborators (shares)
+## Use this skill when
 
-**Item operations** (requires `vaults:write` for writes, `vaults:read` for reads)
-- listing and searching items in a vault
-- adding one or more items to a vault
-- updating an existing vault item
-- deleting an item from a vault
-- bulk-upserting items by DOI or title+year (with idempotency key)
-- previewing what a bulk upsert would do without committing (dry-run)
+- reading or searching vault contents for analysis or synthesis
+- adding, updating, deleting, or importing references into a vault
+- creating or configuring vaults (name, visibility, collaborators)
+- managing tags or relations on vault items
+- exporting a vault or syncing changes incrementally
+- checking whether a RefHub workflow is supported by the current public API
 
-**Tag operations** (requires `vaults:write` for writes, `vaults:read` for reads)
-- listing, creating, updating, and deleting vault-scoped tags
-- attaching and detaching tags from items
+## Do NOT use this skill when
 
-**Relation operations** (requires `vaults:write` for writes, `vaults:read` for reads)
-- listing, creating, updating, and deleting relations between items
+- the requested action requires a Supabase session JWT (key management, Google Drive, Semantic Scholar lookups)
+- the user asks to use a frontend-only feature with no public API route
+- no API key is available — stop and request one before proceeding
 
-**Import** (requires `vaults:write`)
-- importing an item from a DOI (Semantic Scholar enrichment)
-- importing items from a BibTeX string
-- importing an item from a URL (Open Graph metadata)
+---
 
-**Discovery and sync**
-- listing all accessible vaults
-- reading one vault with full contents (items, tags, relations)
-- searching/filtering items within a vault
-- fetching vault stats (item/tag/relation counts, last updated)
-- fetching items changed since a timestamp (incremental sync)
+## Authentication
 
-**Export** (requires `vaults:export`)
-- exporting a vault as JSON or BibTeX
+The API has two auth modes. **Never mix them.**
 
-**Audit** (any valid API key)
-- reading audit logs for all requests by this key's owner
-- reading audit logs scoped to a specific vault
+### Mode 1 — API key (all data routes)
 
-## Do not use this skill for
+```
+Authorization: Bearer rhk_<publicId>_<secret>
+```
 
-These belong to a different auth path or are explicitly outside the public API surface:
+or equivalently:
 
-- API key creation or revocation (requires a human session JWT — setup/admin flow)
-- direct Supabase access as a fallback
-- Google Drive link management (management route, JWT-only)
-- Semantic Scholar paper lookup / recommendations (management route, JWT-only)
-- vault archiving, soft-delete, or item revision history (not yet implemented)
-- webhooks or event subscriptions (not yet implemented)
+```
+X-API-Key: rhk_<publicId>_<secret>
+```
 
-If the user asks for one of those, explain the current limitation clearly.
+Use this for all vault, item, tag, relation, import, search, export, and audit operations.
 
-## Runtime assumptions
+**Scope requirements by operation:**
 
-- Normal runtime auth uses a pre-issued RefHub API key: `rhk_<publicId>_<secret>`.
-- API key management routes use a human session JWT; treat them as setup/admin, not the normal skill path.
-- The API is canonical. Do not invent local-only behavior to emulate missing endpoints.
-- Keys may carry any combination of `vaults:read`, `vaults:write`, `vaults:export`, `vaults:admin`.
-- Keys may be restricted to specific vault IDs at creation time.
+| Scope | Grants |
+|---|---|
+| `vaults:read` | list/read vaults, search, stats, changes, audit |
+| `vaults:write` | add/update/delete items, tags, relations, import |
+| `vaults:export` | export vault as JSON or BibTeX |
+| `vaults:admin` | create/update/delete vaults, visibility, shares |
 
-## Canonical v2 operations and routes
+Keys may also be **vault-restricted** — they can only operate on the vault IDs set at creation time. Check `vault_ids` on the key record.
 
-### Data routes (RefHub API key auth)
+### Mode 2 — Session JWT (management routes only)
 
-**Vaults**
-- `GET    /api/v1/vaults`                                   list accessible vaults (`vaults:read`)
-- `POST   /api/v1/vaults`                                   create vault (`vaults:admin`)
-- `GET    /api/v1/vaults/:vaultId`                          read vault with full contents (`vaults:read`)
-- `PATCH  /api/v1/vaults/:vaultId`                          update vault metadata (`vaults:admin`, owner)
-- `DELETE /api/v1/vaults/:vaultId`                          delete vault — hard delete (`vaults:admin`, owner)
-- `PATCH  /api/v1/vaults/:vaultId/visibility`               set visibility (`vaults:admin`, owner)
-- `GET    /api/v1/vaults/:vaultId/shares`                   list collaborators (`vaults:admin`, owner)
-- `POST   /api/v1/vaults/:vaultId/shares`                   add collaborator (`vaults:admin`, owner)
-- `PATCH  /api/v1/vaults/:vaultId/shares/:shareId`          update collaborator role (`vaults:admin`, owner)
-- `DELETE /api/v1/vaults/:vaultId/shares/:shareId`          remove collaborator (`vaults:admin`, owner)
+```
+Authorization: Bearer <supabase-session-jwt>
+```
 
-**Items**
-- `POST   /api/v1/vaults/:vaultId/items`                    add one or more items (`vaults:write`, editor)
-- `PATCH  /api/v1/vaults/:vaultId/items/:itemId`            update item (`vaults:write`, editor)
-- `DELETE /api/v1/vaults/:vaultId/items/:itemId`            delete item — hard delete (`vaults:write`, editor)
-- `POST   /api/v1/vaults/:vaultId/items/upsert`             bulk upsert by DOI or title+year (`vaults:write`, editor)
-- `POST   /api/v1/vaults/:vaultId/items/import-preview`     dry-run upsert — writes nothing (`vaults:read`)
-- `GET    /api/v1/vaults/:vaultId/items`                    search/filter items (`vaults:read`, viewer)
+Use only for: `GET/POST/DELETE /api/v1/keys`, Semantic Scholar routes, Google Drive routes, `GET /api/v1/audit`.
 
-**Tags**
-- `GET    /api/v1/vaults/:vaultId/tags`                     list tags (`vaults:read`, viewer)
-- `POST   /api/v1/vaults/:vaultId/tags`                     create tag (`vaults:write`, editor)
-- `PATCH  /api/v1/vaults/:vaultId/tags/:tagId`              update tag (`vaults:write`, editor)
-- `DELETE /api/v1/vaults/:vaultId/tags/:tagId`              delete tag (`vaults:write`, editor)
-- `POST   /api/v1/vaults/:vaultId/tags/attach`              attach tags to item (`vaults:write`, editor)
-- `POST   /api/v1/vaults/:vaultId/tags/detach`              detach tags from item (`vaults:write`, editor)
+**If an API key (`rhk_...`) is sent to a management route, the API returns `401 refhub_api_key_not_supported`.** This is expected. Do not retry with the same key.
 
-**Relations**
-- `GET    /api/v1/vaults/:vaultId/relations`                list relations (`vaults:read`, viewer)
-- `POST   /api/v1/vaults/:vaultId/relations`                create relation (`vaults:write`, editor)
-- `PATCH  /api/v1/vaults/:vaultId/relations/:relationId`    update relation type (`vaults:write`, editor)
-- `DELETE /api/v1/vaults/:vaultId/relations/:relationId`    delete relation (`vaults:write`, editor)
+### When credentials are missing or insufficient
 
-**Import**
-- `POST   /api/v1/vaults/:vaultId/import/doi`               import from DOI (`vaults:write`, editor)
-- `POST   /api/v1/vaults/:vaultId/import/bibtex`            import from BibTeX (`vaults:write`, editor)
-- `POST   /api/v1/vaults/:vaultId/import/url`               import from URL (`vaults:write`, editor)
+- No key present → stop, report `auth_error`, ask the user to provide an API key
+- Wrong scope → report `permission_error` with the missing scope; do not attempt workarounds
+- Key vault-restricted and target vault not in restriction list → report `permission_error`; do not try a different vault silently
 
-**Search / stats / sync**
-- `GET    /api/v1/vaults/:vaultId/search`                   search items (`vaults:read`, viewer)
-- `GET    /api/v1/vaults/:vaultId/stats`                    counts + last updated (`vaults:read`, viewer)
-- `GET    /api/v1/vaults/:vaultId/changes`                  items changed since timestamp (`vaults:read`, viewer)
+---
 
-**Export**
-- `GET    /api/v1/vaults/:vaultId/export?format=json|bibtex` export vault (`vaults:export`, viewer)
+## Supported workflows
 
-**Audit**
-- `GET    /api/v1/vaults/:vaultId/audit`                    vault-scoped audit log (any valid API key)
+Base URL: `https://refhub-api.netlify.app/api/v1`
 
-### Management routes (Supabase session JWT)
+### Vaults
 
-- `GET    /api/v1/audit`                                    all audit logs for key owner (any valid key)
-- `GET /api/v1/keys`, `POST /api/v1/keys`, `DELETE /api/v1/keys/:keyId`  API key management (JWT only)
+**List accessible vaults** — `vaults:read`
+1. `GET /vaults`
+2. Filter by `permission`, `item_count`, or `updated_at` from the response as needed
+3. Never infer `vault_id` from a vault name — always resolve it from this list first
 
-## Output expectations
+**Read one vault** — `vaults:read`
+1. Confirm `vault_id` is known (list first if not)
+2. `GET /vaults/:vaultId`
+3. Response includes vault metadata, all items, tags, publication_tags, and relations
 
-Prefer structured, predictable results over chatty prose.
+**Create vault** — `vaults:admin`
+1. Confirm key has `vaults:admin` scope
+2. `POST /vaults` with `{ name, description?, color?, visibility?, category?, abstract? }`
+3. `visibility` defaults to `private`
+4. Return the created vault id
 
-When possible, return:
+**Update vault metadata** — `vaults:admin` + owner
+1. `PATCH /vaults/:vaultId` with any subset of `{ name, description, color, category, abstract }`
+2. Do not send `visibility` or `public_slug` here — use the visibility endpoint
 
-- normalized vault/item summaries
-- created or updated item IDs
-- request IDs when available
-- explicit partial-failure reporting
-- clear error category: `auth_error`, `permission_error`, `input_error`, `not_found`, or `service_error`
+**Delete vault** — `vaults:admin` + owner
+1. **Warn the user — this is a hard delete with no undo**
+2. Confirm intent explicitly before proceeding
+3. `DELETE /vaults/:vaultId` → `204 No Content`
+4. Cascades: all items, tags, shares, and key restrictions for this vault are removed
+
+**Set visibility** — `vaults:admin` + owner
+1. `PATCH /vaults/:vaultId/visibility` with `{ visibility: 'private'|'protected'|'public', public_slug? }`
+2. `public` requires a unique `public_slug` (lowercase alphanumeric + hyphens)
+3. `private` clears `public_slug`; adding a share to a `private` vault auto-upgrades it to `protected`
+
+**Manage shares** — `vaults:admin` + owner
+1. List: `GET /vaults/:vaultId/shares`
+2. Add: `POST /vaults/:vaultId/shares` with `{ email?, user_id?, role }` (role: `viewer|editor|owner`)
+3. Update: `PATCH /vaults/:vaultId/shares/:shareId` with `{ role }`
+4. Remove: `DELETE /vaults/:vaultId/shares/:shareId` → `204 No Content`
+
+---
+
+### Items
+
+**Add items** — `vaults:write` + editor
+1. Confirm vault access and that `tag_ids` (if any) already exist in the vault
+2. `POST /vaults/:vaultId/items` with `{ items: [{ title, authors?, year?, doi?, tag_ids?, ... }] }`
+3. Each item must include `title`; `tag_ids` must reference existing vault tags
+4. On partial failure the backend attempts rollback; treat `bulk_insert_partial_failure` as a high-severity error requiring manual review
+
+**Update item** — `vaults:write` + editor
+1. `PATCH /vaults/:vaultId/items/:itemId` with any publication fields
+2. If `tag_ids` is included, it **replaces the full tag set** — not additive
+3. `version` increments automatically on metadata updates
+
+**Delete item** — `vaults:write` + editor
+1. **Warn the user — hard delete, no undo**
+2. `DELETE /vaults/:vaultId/items/:itemId` → `204 No Content`
+3. The underlying `publications` row is preserved (shared across vaults)
+
+**Bulk upsert** — `vaults:write` + editor
+1. Always pass an `idempotency_key` for safe retries
+2. `POST /vaults/:vaultId/items/upsert` with `{ items: [...], idempotency_key? }`
+3. Match strategy: DOI first, then title+year
+4. Each item result includes `action: 'created'|'updated'|'skipped'`
+5. A repeated `idempotency_key` within 24h returns the previous result without re-executing
+
+**Import preview (dry-run)** — `vaults:read`
+1. Use before committing a bulk upsert to show what would change
+2. `POST /vaults/:vaultId/items/import-preview` — same body as upsert, writes nothing
+
+---
+
+### Import
+
+**From DOI** — `vaults:write` + editor
+1. `POST /vaults/:vaultId/import/doi` with `{ doi, tag_ids?: [] }`
+2. Backend calls Semantic Scholar internally — fails if `SEMANTIC_SCHOLAR_API_KEY` is not configured server-side
+3. Returns `409` if the DOI already exists in the vault; surface the existing item id
+
+**From BibTeX** — `vaults:write` + editor
+1. `POST /vaults/:vaultId/import/bibtex` with `{ bibtex, tag_ids?: [] }`
+2. Accepts single or multi-entry BibTeX strings
+3. Skips entries where `bibtex_key` already exists; returns `{ created: [...], skipped: [...] }`
+
+**From URL** — `vaults:write` + editor
+1. `POST /vaults/:vaultId/import/url` with `{ url, tag_ids?: [] }`
+2. Best-effort Open Graph scrape; creates the item with whatever metadata is available
+
+---
+
+### Tags
+
+All tag writes require `vaults:write` + editor. Reads require `vaults:read`.
+
+1. List: `GET /vaults/:vaultId/tags`
+2. Create: `POST /vaults/:vaultId/tags` with `{ name, color?, parent_id? }`
+3. Update: `PATCH /vaults/:vaultId/tags/:tagId` with `{ name?, color?, parent_id? }`
+4. Delete: `DELETE /vaults/:vaultId/tags/:tagId` → `204`; cascades publication_tags; child tags bubble up to deleted tag's parent
+5. Attach: `POST /vaults/:vaultId/tags/attach` with `{ item_id, tag_ids: [] }` — idempotent
+6. Detach: `POST /vaults/:vaultId/tags/detach` with `{ item_id, tag_ids: [] }` — silently ignores unattached ids
+
+---
+
+### Relations
+
+All relation writes require `vaults:write` + editor. Reads require `vaults:read`.
+
+1. List: `GET /vaults/:vaultId/relations?source_id=&target_id=&type=`
+2. Create: `POST /vaults/:vaultId/relations` with `{ publication_id, related_publication_id, relation_type? }` — idempotent; returns existing record with `200` if pair exists
+3. Update: `PATCH /vaults/:vaultId/relations/:relationId` with `{ relation_type }` — only the type is mutable
+4. Delete: `DELETE /vaults/:vaultId/relations/:relationId` → `204`
+
+Supported relation types: `cites`, `extends`, `builds_on`, `contradicts`, `reviews`, `related`.
+
+---
+
+### Search, stats, and sync
+
+All require `vaults:read` + viewer.
+
+**Search items:** `GET /vaults/:vaultId/search?q=&author=&year=&doi=&tag_id=&type=&page=&limit=`
+- `limit` default 20, max 100
+- `q` is case-insensitive substring match across title, abstract, authors
+
+**Stats:** `GET /vaults/:vaultId/stats`
+- Returns `{ item_count, tag_count, relation_count, last_updated }`
+
+**Incremental sync:** `GET /vaults/:vaultId/changes?since=<ISO timestamp>`
+- Returns all items where `updated_at > since`
+- Use this instead of a full vault read when only detecting changes
+
+---
+
+### Export
+
+Requires `vaults:export` + viewer.
+
+`GET /vaults/:vaultId/export?format=json|bibtex`
+
+Returns attachment-style serialized content. Preserve the raw payload; do not re-parse unless explicitly needed.
+
+---
+
+### Audit
+
+Requires any valid API key (data route for vault-scoped; JWT for global).
+
+- Vault-scoped: `GET /vaults/:vaultId/audit?since=&until=&limit=&page=`
+- Global (JWT only): `GET /audit?since=&until=&limit=&page=`
+- `limit` default 50, max 200
+
+---
+
+## Error handling
+
+| Status | Code examples | Agent action |
+|---|---|---|
+| `401` | `missing_api_key`, `invalid_api_key_format`, `expired_api_key`, `revoked_api_key` | Stop. Report clearly. Do not retry with the same key. Ask user to provide a valid key. |
+| `401` | `refhub_api_key_not_supported` | API key sent to a JWT-only route. Switch auth mode or stop. |
+| `403` | `missing_scope` | Key lacks required scope. Report which scope is needed. Do not attempt workaround. |
+| `403` | `vault_access_denied`, `vault_not_found` | No access to this vault with this key. Report and stop. |
+| `404` | `item_not_found`, `tag_not_found`, `relation_not_found` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
+| `409` | (DOI import, duplicate relation) | Resource already exists. Surface the existing item id to the user. |
+| `413` | `request_too_large` | Payload too large. Split the request into smaller batches. |
+| `429` | `rate_limit_exceeded` | Back off. Use `retry_after_seconds` from the response. |
+| `500` | `bulk_insert_partial_failure`, `bulk_insert_failed` | Partial write may have occurred. Do not retry without `idempotency_key`. Alert user for manual review if partial failure. |
+| `5xx` | `internal_error`, `service_error` | Transient. Retry once with backoff. If it persists, report and stop. |
+
+Every error response includes `error.code`, `error.message`, and `meta.request_id`. Always surface `request_id` when reporting failures.
+
+---
 
 ## Guardrails
 
-- Be explicit about scope failures (`vaults:read`, `vaults:write`, `vaults:export`, `vaults:admin`).
-- Be explicit about vault restriction failures on API keys.
-- `vaults:admin` + owner vault permission required for vault create/delete/visibility/shares — do not attempt with lower scopes.
-- Treat unsupported workflows as unsupported, not as invitations to improvise.
-- Bulk upsert uses DOI-first then title+year matching; pass an `idempotency_key` for safe retries.
-- If `tag_ids` is present on item update or attach, treat it as full replacement semantics.
-- Vault delete and item delete are hard deletes — no undo. Warn before proceeding.
+- **Never infer `vault_id` from a vault name.** Always call `GET /vaults` and resolve it from the response.
+- **Never mix JWT and API key auth.** Management routes reject API keys. Data routes do not accept JWTs.
+- **Never assume a tag exists.** List tags before using `tag_ids` in any write.
+- **Never create tags implicitly during item writes.** Tag creation is a separate step.
+- **Never retry a bulk write after ambiguous failure** unless you have an `idempotency_key`.
+- **Never assume frontend capability equals API support.** Features in the RefHub UI backed by direct Supabase access may not have a public API route.
+- **Never proceed with vault or item deletion without explicit user confirmation.** Both are hard deletes with no undo.
+- **Never send `visibility` or `public_slug` in `PATCH /vaults/:vaultId`.** Use the dedicated visibility endpoint.
+- **`tag_ids` on item update is a full replacement, not an append.** Make this explicit to the user before patching.
 
-## When to read the bundled docs
+---
 
-Read these only as needed:
+## Scope boundary
 
-- `docs/spec.md` — full workflow and behavior contract; use when you need detailed per-operation rules or edge cases
-- `docs/api-mapping.md` — exact endpoint-to-workflow table, scope requirements, and unsupported areas; use for “can the API do this?” questions
+The following are explicitly outside this skill:
 
-## Strategic rule
+- API key creation, rotation, or revocation (requires human session JWT)
+- Google Drive link management (JWT-only management route)
+- Semantic Scholar paper lookup, recommendations, references, citations (JWT-only)
+- Vault archiving, soft-delete, or restore (not implemented in the API)
+- Item revision history or restore (not implemented)
+- Item move or copy between vaults (not implemented)
+- Webhooks or event subscriptions (not implemented)
+- Any direct Supabase access as a fallback
 
-RefHub should evolve in this order:
+If a user requests one of these, state clearly that the current public API does not support it and do not improvise an alternative.
 
-`API -> Skill -> CLI / MCP`
+---
 
-Keep the skill honest and aligned to the current public API.
+## References
+
+- `docs/api-mapping.md` — full endpoint table with scopes, permissions, and constraints
+- `docs/spec.md` — detailed per-workflow behavioral contracts and edge cases
