@@ -6,10 +6,13 @@
 
 Its job is to let an agent reliably do useful reference-management work without exposing raw backend complexity or pretending unsupported operations exist.
 
-The skill should be optimized for:
+The skill is optimized for:
 
+- managing vault structure (create, configure, share)
 - reading vaults for analysis and synthesis
-- adding or updating references in a target vault
+- adding, updating, deleting, and importing references
+- organizing items with tags and relations
+- searching and syncing vault contents incrementally
 - exporting vault contents for downstream tools
 - working safely with scoped API keys
 
@@ -23,12 +26,14 @@ The RefHub API defines the source of truth for what the skill can do over the ne
 
 ### 2.2 Workflow-first, not endpoint-first
 
-The skill should expose tasks like:
+The skill exposes tasks like:
 
-- list accessible vaults
-- inspect a vault
-- add references to a vault
-- update notes or metadata on an existing vault item
+- create and configure a vault
+- inspect a vault and its contents
+- add or import references to a vault
+- update notes or metadata on an existing item
+- classify items with tags and relations
+- search for items without a full vault download
 - export a vault for local processing
 
 not generic transport verbs.
@@ -41,10 +46,10 @@ If the product supports something via direct Supabase/frontend code but the publ
 
 The skill should return structured results that downstream agents can rely on:
 
-- normalized vault summaries
-- normalized item summaries
+- normalized vault/item summaries
 - request IDs when available
 - explicit partial-failure reporting
+- per-item action outcomes for upsert operations
 
 ### 2.5 No fake orchestration
 
@@ -52,169 +57,271 @@ No placeholder commands, no fake tool handlers, no pretend offline sync layer.
 
 ## 3. Core domain model
 
-Grounded in the current frontend schema and backend handler:
-
 - `vault`
   - collection boundary for references and collaboration
-  - key fields include `id`, `name`, `description`, `visibility`, `category`, `abstract`, `updated_at`
+  - key fields: `id`, `name`, `description`, `color`, `visibility`, `category`, `abstract`, `updated_at`
+  - visibility values: `private`, `protected`, `public`
 - `vault item`
   - agent-facing term for a `vault_publications` row
   - carries title, authors, year, DOI, URL, abstract, notes, BibTeX-oriented metadata, version
 - `canonical publication`
-  - underlying `publications` row created alongside a vault item
+  - underlying `publications` row created alongside a vault item; shared across vaults
 - `tag`
-  - currently vault-scoped for shared-vault workflows
+  - vault-scoped, supports `name`, `color`, optional `parent_id` for hierarchy
 - `publication tag`
   - joins tag IDs to vault items
 - `publication relation`
-  - connects vault items, for example `cites`, `extends`, `builds_on`, `contradicts`, `reviews`
+  - connects vault items; supported types include `cites`, `extends`, `builds_on`, `contradicts`, `reviews`, `related`
+- `vault share`
+  - collaborator entry: user + role (`viewer`, `editor`, `owner`)
 - `api key`
-  - scoped bearer credential for API access
+  - scoped bearer credential; may carry `vaults:read`, `vaults:write`, `vaults:export`, `vaults:admin`
 
 ## 4. Actor model
 
 ### 4.1 Human owner
 
-Creates and manages RefHub API keys through authenticated management routes.
+Creates and manages RefHub API keys through authenticated management routes (Supabase session JWT).
 
 ### 4.2 Agent using the skill
 
-Uses an existing API key to perform constrained RefHub workflows.
+Uses an existing API key to perform constrained RefHub workflows. Key scope and vault restrictions bound what the agent can do.
 
 ### 4.3 RefHub API
 
-Authoritative service for vault access, item writes, and export.
+Authoritative service for all vault, item, tag, relation, import, search, audit, and export operations.
 
-## 5. v1 skill goals
+## 5. Skill goals
 
-The first skill release should support only workflows already backed by the current public API:
+The skill supports all workflows already backed by the current public API:
 
 1. Discover accessible vaults.
-2. Read one vault and its contents.
-3. Add one or more items to a vault.
-4. Update one existing vault item.
-5. Export a vault as JSON or BibTeX.
-6. Provide enough response structure for downstream summarization, note generation, or local transformation.
+2. Read one vault with its full contents.
+3. Create, update metadata, and delete vaults.
+4. Set vault visibility and manage collaborators.
+5. Add one or more items to a vault.
+6. Update one existing vault item.
+7. Delete an item from a vault.
+8. Bulk-upsert items by DOI or title+year (with idempotency).
+9. Preview what a bulk upsert would do (dry-run).
+10. Import items from a DOI, a BibTeX string, or a URL.
+11. List, create, update, and delete vault-scoped tags.
+12. Attach and detach tags from items.
+13. List, create, update, and delete relations between items.
+14. Search/filter items within a vault.
+15. Fetch vault stats (counts and last updated timestamp).
+16. Fetch items changed since a given timestamp (incremental sync).
+17. Export a vault as JSON or BibTeX.
+18. Read audit logs for the key's owner, optionally scoped to a vault.
+19. Provide enough response structure for downstream summarization, note generation, or local transformation.
 
-## 6. Non-goals for v1
+## 6. Non-goals
 
-Do not include these in the first implementation unless the API lands first:
+Do not include these unless the API lands first:
 
-- vault creation
-- vault deletion
-- tag creation or tag editing
-- relation creation or deletion
-- sharing and permission management
-- favorites or forks
-- access-request approval flows
-- direct DOI lookup or Semantic Scholar enrichment inside the skill
-- broad search across RefHub content
-- local database sync
-
-Those are real product capabilities or likely future capabilities, but they are not currently clean skill targets through the public API.
+- vault archiving, unarchiving, or soft-delete
+- vault duplication or clone
+- item restore after deletion
+- item revision history
+- item move/copy between vaults
+- bulk relation import
+- webhooks or event subscriptions
+- full-text index-backed search (ILIKE is used for vault-scoped queries)
 
 ## 7. Primary workflows
 
 ### 7.1 List vaults
 
-Intent:
+Intent: let an agent discover where it can act.
 
-- let an agent discover where it can act
+Endpoint: `GET /api/v1/vaults`
 
-Expected behavior:
-
-- returns all accessible vaults allowed by the key's scopes and optional vault restrictions
-- includes permission level and item count
-
-Minimum output shape:
-
-```json
-{
-  "vaults": [
-    {
-      "id": "uuid",
-      "name": "AI Reading List",
-      "visibility": "private",
-      "permission": "owner",
-      "item_count": 12,
-      "updated_at": "2026-03-23T18:00:00Z"
-    }
-  ],
-  "request_id": "uuid"
-}
-```
+Output includes permission level and item count per vault.
 
 ### 7.2 Read vault
 
-Intent:
+Intent: load enough structured content for analysis, summarization, curation, or export preparation.
 
-- load enough structured content for analysis, summarization, curation, or export preparation
+Endpoint: `GET /api/v1/vaults/:vaultId`
 
-Expected behavior:
+Returns vault metadata, vault items, tags, item-tag links, and relations.
 
-- returns vault metadata
-- returns vault items
-- returns vault tags
-- returns item-tag links
-- returns relations for the returned items
+### 7.3 Create vault
 
-Skill expectation:
+Intent: set up a workspace for an automation task.
 
-- preserve raw API fields
-- also provide an agent-friendly summary count block
+Endpoint: `POST /api/v1/vaults`
 
-### 7.3 Add items to a vault
+Requires `vaults:admin`. Body: `{ name, description?, color?, visibility?, category?, abstract? }`. Visibility defaults to `private`.
 
-Intent:
+### 7.4 Update vault
 
-- import references prepared elsewhere
+Intent: revise vault metadata.
 
-Expected behavior:
+Endpoint: `PATCH /api/v1/vaults/:vaultId`
 
-- accepts one or more items
-- requires title per item
-- allows existing vault tag IDs only
-- rejects oversized batches or unknown tag IDs
+Requires `vaults:admin` + owner permission. Accepts any subset of `{ name, description, color, category, abstract }`. Does not accept `visibility` — use the visibility endpoint for that.
 
-Skill expectation:
+### 7.5 Delete vault
 
-- pre-validate obvious shape errors before sending
-- return created vault item IDs
-- treat a backend rollback failure as a high-severity error
+Intent: remove a vault and all its contents permanently.
 
-### 7.4 Update one vault item
+Endpoint: `DELETE /api/v1/vaults/:vaultId`
 
-Intent:
+Requires `vaults:admin` + owner permission. Hard delete. Cascades: items, tags, shares, API key vault restrictions. Returns `204 No Content`. No undo.
 
-- revise notes, metadata, or tags on an existing reference
+### 7.6 Set visibility
 
-Expected behavior:
+Intent: control who can discover and access the vault.
 
-- partial update of a vault item
-- if `tag_ids` is present, it replaces the full tag set
-- increments the version field on successful metadata updates
+Endpoint: `PATCH /api/v1/vaults/:vaultId/visibility`
 
-Skill expectation:
+Requires `vaults:admin` + owner permission. Body: `{ visibility: 'private'|'protected'|'public', public_slug?: string }`.
+- `public` requires a `public_slug` (lowercase alphanumeric + hyphens, unique).
+- `private` clears `public_slug`.
+- Adding a share to a `private` vault auto-upgrades it to `protected`.
 
-- make tag replacement semantics explicit
-- distinguish `item not found` from `permission denied`
+### 7.7 Share management
 
-### 7.5 Export vault
+Intent: add or modify collaborators on a vault.
 
-Intent:
+Endpoints: `GET/POST /api/v1/vaults/:vaultId/shares`, `PATCH/DELETE /api/v1/vaults/:vaultId/shares/:shareId`
 
-- hand off a vault to local scripts, citation tooling, or another agent stage
+Requires `vaults:admin` + owner permission. Roles: `viewer`, `editor`, `owner`.
 
-Expected behavior:
+### 7.8 Add items
 
-- supports `json` and `bibtex`
-- returns attachment-like serialized output
+Intent: import references prepared elsewhere.
 
-Skill expectation:
+Endpoint: `POST /api/v1/vaults/:vaultId/items`
 
-- expose export format choice explicitly
-- preserve the raw serialized payload
-- optionally attach lightweight metadata such as byte length and request ID
+Accepts one or more items. Each must include `title`. Tag IDs must already exist. Backend prevalidates and attempts rollback on failure.
+
+### 7.9 Update item
+
+Intent: revise notes, metadata, or tags on an existing reference.
+
+Endpoint: `PATCH /api/v1/vaults/:vaultId/items/:itemId`
+
+Partial update. If `tag_ids` is present, it replaces the full tag set. Increments `version` on successful metadata updates.
+
+Skill expectation: make tag replacement semantics explicit; distinguish `item not found` from `permission denied`.
+
+### 7.10 Delete item
+
+Intent: permanently remove a vault item.
+
+Endpoint: `DELETE /api/v1/vaults/:vaultId/items/:itemId`
+
+Requires `vaults:write` + editor. Hard delete from `vault_publications`. The underlying `publications` row is preserved (may be referenced by other vaults). Returns `204 No Content`.
+
+### 7.11 Bulk upsert items
+
+Intent: idempotently import a set of references.
+
+Endpoint: `POST /api/v1/vaults/:vaultId/items/upsert`
+
+Body: `{ items: [...], idempotency_key?: string }`. Match strategy: DOI first, then title+year. Per-item result includes `action: 'created'|'updated'|'skipped'`. If `idempotency_key` was seen within 24h, returns previous result without re-executing.
+
+### 7.12 Import preview (dry-run)
+
+Intent: show the user what would change before committing.
+
+Endpoint: `POST /api/v1/vaults/:vaultId/items/import-preview`
+
+Requires only `vaults:read`. Same body and response shape as upsert. Writes nothing.
+
+### 7.13 Import from DOI
+
+Intent: enrich and create an item from a DOI in one step.
+
+Endpoint: `POST /api/v1/vaults/:vaultId/import/doi`
+
+Body: `{ doi, tag_ids?: [] }`. Calls Semantic Scholar internally. Returns the created item. Returns `409` if the DOI already exists in the vault.
+
+### 7.14 Import from BibTeX
+
+Intent: bulk-import from a BibTeX string.
+
+Endpoint: `POST /api/v1/vaults/:vaultId/import/bibtex`
+
+Body: `{ bibtex, tag_ids?: [] }`. Parses single or multi-entry BibTeX. Skips entries where `bibtex_key` already exists in the vault. Returns `{ created: [...], skipped: [...] }`.
+
+### 7.15 Import from URL
+
+Intent: create an item from a webpage.
+
+Endpoint: `POST /api/v1/vaults/:vaultId/import/url`
+
+Body: `{ url, tag_ids?: [] }`. Fetches Open Graph / meta tags. Best-effort: creates with whatever metadata is available (at minimum `title` + `url`).
+
+### 7.16 Tag CRUD
+
+Intent: make tags independently manageable rather than only accessible through full vault reads.
+
+Endpoints: `GET/POST /api/v1/vaults/:vaultId/tags`, `PATCH/DELETE /api/v1/vaults/:vaultId/tags/:tagId`
+
+- Create: `{ name, color?, parent_id? }`. Depth computed from parent chain automatically.
+- Update: any subset of `{ name, color, parent_id }`. Guards against circular parent references.
+- Delete: cascades `publication_tags`; child tags bubble up to deleted tag's parent. Returns `204`.
+
+### 7.17 Attach/detach tags
+
+Intent: assign or remove tags from an existing item without a full item update.
+
+Endpoints: `POST /api/v1/vaults/:vaultId/tags/attach`, `POST /api/v1/vaults/:vaultId/tags/detach`
+
+Attach is idempotent — no duplicate rows. Detach silently ignores tag IDs not currently attached.
+
+### 7.18 Relation CRUD
+
+Intent: make item relationships independently manageable.
+
+Endpoints: `GET/POST /api/v1/vaults/:vaultId/relations`, `PATCH/DELETE /api/v1/vaults/:vaultId/relations/:relationId`
+
+List supports `?source_id=`, `?target_id=`, `?type=` query params. Create is idempotent (returns existing record with `200` if pair exists). Only `relation_type` is mutable after creation.
+
+### 7.19 Search and filter items
+
+Intent: answer narrow questions without downloading a full vault.
+
+Endpoints: `GET /api/v1/vaults/:vaultId/search` or `GET /api/v1/vaults/:vaultId/items`
+
+Query params: `?q=`, `?author=`, `?year=`, `?doi=`, `?tag_id=`, `?type=`, `?page=`, `?limit=` (default 20, max 100). Returns paginated items with their `tag_ids`.
+
+### 7.20 Vault stats
+
+Intent: quick summary for an agent planning how to work with a vault.
+
+Endpoint: `GET /api/v1/vaults/:vaultId/stats`
+
+Returns `{ item_count, tag_count, relation_count, last_updated }`.
+
+### 7.21 Incremental sync (changes feed)
+
+Intent: detect what changed since last sync without a full vault download.
+
+Endpoint: `GET /api/v1/vaults/:vaultId/changes?since=<ISO timestamp>`
+
+Returns all `vault_publications` where `updated_at > since`.
+
+### 7.22 Export vault
+
+Intent: hand off a vault to local scripts, citation tooling, or another agent stage.
+
+Endpoint: `GET /api/v1/vaults/:vaultId/export?format=json|bibtex`
+
+Requires `vaults:export`. Returns attachment-like serialized output.
+
+### 7.23 Read audit log
+
+Intent: observe what operations were performed, by whom, and when.
+
+Endpoints:
+- `GET /api/v1/vaults/:vaultId/audit` — vault-scoped (API key auth)
+- `GET /api/v1/audit` — all requests for key's owner (JWT management auth)
+
+Query params: `?since=`, `?until=`, `?limit=` (default 50, max 200), `?page=`.
 
 ## 8. Failure behavior
 
@@ -222,16 +329,11 @@ The skill should normalize failures into a predictable structure.
 
 Categories:
 
-- `auth_error`
-  - missing API key, invalid key format, expired key, revoked key
-- `permission_error`
-  - missing scope, vault access denied, write access denied
-- `input_error`
-  - invalid JSON, invalid item payload, invalid tag IDs, unsupported export format
-- `not_found`
-  - vault not found, item not found, route not found
-- `service_error`
-  - internal backend error, rollback failure, transient upstream issue
+- `auth_error` — missing API key, invalid key format, expired key, revoked key
+- `permission_error` — missing scope, vault access denied, write access denied, wrong vault permission level
+- `input_error` — invalid JSON, invalid item payload, invalid tag IDs, unsupported export format, unknown relation type
+- `not_found` — vault not found, item not found, tag not found, relation not found, route not found
+- `service_error` — internal backend error, rollback failure, transient upstream issue
 
 Every surfaced error should keep:
 
@@ -246,19 +348,25 @@ The skill should assume:
 
 - API key creation and revocation are management concerns outside normal agent runtime
 - normal skill execution uses a pre-issued `rhk_<publicId>_<secret>` key
-- keys may be scope-limited and vault-limited
+- keys may be scope-limited to any combination of `vaults:read`, `vaults:write`, `vaults:export`, `vaults:admin`
+- keys may be vault-restricted
 
 The skill should not require a Supabase session JWT for ordinary use.
 
 ## 10. Skill interface shape
 
-The implementation can choose its manifest format later, but the conceptual operations should be:
+Conceptual operations:
 
-- `vaults.list`
-- `vaults.get`
-- `items.add`
-- `items.update`
+- `vaults.list` / `vaults.get` / `vaults.create` / `vaults.update` / `vaults.delete`
+- `vaults.setVisibility`
+- `vaults.shares.list` / `vaults.shares.add` / `vaults.shares.update` / `vaults.shares.remove`
+- `items.add` / `items.update` / `items.delete` / `items.upsert` / `items.importPreview`
+- `items.search` / `items.stats` / `items.changes`
+- `import.doi` / `import.bibtex` / `import.url`
+- `tags.list` / `tags.create` / `tags.update` / `tags.delete` / `tags.attach` / `tags.detach`
+- `relations.list` / `relations.create` / `relations.update` / `relations.delete`
 - `vaults.export`
+- `audit.list`
 
 These names are stable enough for the spec and can later be mapped onto CLI verbs and MCP tools.
 
@@ -270,34 +378,35 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 - Do not silently create tags.
 - Do not silently re-run bulk writes after ambiguous failure.
 - Prefer idempotent read flows and explicit write confirmations.
+- Vault and item deletes are permanent — warn before proceeding.
 
-## 12. What exists now vs what is proposed
+## 12. What exists now vs what is deferred
 
-### Exists now
+### Exists now (public API)
 
 - API key management routes
-- vault list/read routes
-- item add/update routes
-- JSON and BibTeX export routes
+- vault list / read / create / update / delete / visibility / shares
+- item add / update / delete / upsert / import-preview
+- DOI, BibTeX, and URL import
+- tag CRUD + attach/detach
+- relation CRUD
+- search, stats, and changes feed
+- JSON and BibTeX export
+- audit log read endpoints
 
-### Exists in product, but not in public API contract yet
+### Deferred
 
-- vault creation and editing
-- richer tag management
-- publication relation management
-- sharing workflows
-- favorites and forks
-- DOI-assisted import flows in the frontend
+- vault archiving and soft-delete
+- item revision history and restore
+- item move/copy between vaults
+- webhooks and event delivery
+- audit log viewer in the frontend
 
-### Proposed next
+## 13. Acceptance criteria
 
-- add API coverage for high-value missing workflows before expanding the skill surface
+The skill implementation is acceptable when:
 
-## 13. Acceptance criteria for first implementation
-
-The first implementation is acceptable when:
-
-- every v1 workflow maps directly to a current public API route
+- every workflow maps directly to a current public API route
 - unsupported workflows fail clearly with documented reasons
 - outputs are structured enough for downstream agents
 - the implementation does not require direct Supabase access
