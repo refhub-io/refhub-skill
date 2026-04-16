@@ -168,7 +168,7 @@ Intent: remove a vault and all its contents permanently.
 
 Endpoint: `DELETE /api/v1/vaults/:vaultId`
 
-Requires `vaults:admin` + owner permission. Hard delete. Cascades: items, tags, shares, API key vault restrictions. Returns `204 No Content`. No undo.
+Requires `vaults:admin` + owner permission. Hard delete. Cascades: items, tags, shares, API key vault restrictions. Returns `200 { data: { id } }`. No undo.
 
 ### 7.6 Set visibility
 
@@ -187,7 +187,7 @@ Intent: add or modify collaborators on a vault.
 
 Endpoints: `GET/POST /api/v1/vaults/:vaultId/shares`, `PATCH/DELETE /api/v1/vaults/:vaultId/shares/:shareId`
 
-Requires `vaults:admin` + owner permission. Roles: `viewer`, `editor`, `owner`.
+List requires `vaults:read` + viewer. All mutations require `vaults:admin` + owner. Valid roles: `viewer`, `editor`. `POST` body: `{ email, role, name? }` — `email` is required. DELETE returns `200 { data: { id } }`.
 
 ### 7.8 Add items
 
@@ -213,7 +213,7 @@ Intent: permanently remove a vault item.
 
 Endpoint: `DELETE /api/v1/vaults/:vaultId/items/:itemId`
 
-Requires `vaults:write` + editor. Hard delete from `vault_publications`. The underlying `publications` row is preserved (may be referenced by other vaults). Returns `204 No Content`.
+Requires `vaults:write` + editor. Hard delete from `vault_publications`. The underlying `publications` row is preserved (may be referenced by other vaults). Returns `200 { data: { id } }`.
 
 ### 7.11 Bulk upsert items
 
@@ -221,7 +221,7 @@ Intent: idempotently import a set of references.
 
 Endpoint: `POST /api/v1/vaults/:vaultId/items/upsert`
 
-Body: `{ items: [...], idempotency_key?: string }`. Match strategy: DOI first, then title+year. Per-item result includes `action: 'created'|'updated'|'skipped'`. If `idempotency_key` was seen within 24h, returns previous result without re-executing.
+Body: `{ items: [...], idempotency_key?: string }`. Match strategy: DOI first, then `bibtex_key` — items with neither are always created. Response: `{ data: { created: [...], updated: [...], errors: [...] } }`. If `idempotency_key` was seen within **5 minutes**, returns the cached result without re-executing.
 
 ### 7.12 Import preview (dry-run)
 
@@ -229,7 +229,7 @@ Intent: show the user what would change before committing.
 
 Endpoint: `POST /api/v1/vaults/:vaultId/items/import-preview`
 
-Requires only `vaults:read`. Same body and response shape as upsert. Writes nothing.
+Requires only `vaults:read`. Same body as upsert. Writes nothing. Response: `{ data: { would_create: [...], would_update: [...], invalid: [...] } }`.
 
 ### 7.13 Import from DOI
 
@@ -263,7 +263,7 @@ Endpoints: `GET/POST /api/v1/vaults/:vaultId/tags`, `PATCH/DELETE /api/v1/vaults
 
 - Create: `{ name, color?, parent_id? }`. Depth computed from parent chain automatically.
 - Update: any subset of `{ name, color, parent_id }`. Guards against circular parent references.
-- Delete: cascades `publication_tags`; child tags bubble up to deleted tag's parent. Returns `204`.
+- Delete: cascades `publication_tags`; child tags bubble up to deleted tag's parent. Returns `200 { data: { id } }`.
 
 ### 7.17 Attach/detach tags
 
@@ -279,7 +279,7 @@ Intent: make item relationships independently manageable.
 
 Endpoints: `GET/POST /api/v1/vaults/:vaultId/relations`, `PATCH/DELETE /api/v1/vaults/:vaultId/relations/:relationId`
 
-List supports `?source_id=`, `?target_id=`, `?type=` query params. Create is idempotent (returns existing record with `200` if pair exists). Only `relation_type` is mutable after creation.
+List supports `?type=` query param only. Create is not idempotent — submitting a duplicate pair will error; check before creating. Only `relation_type` is mutable after creation. Delete returns `200 { data: { id } }`.
 
 ### 7.19 Search and filter items
 

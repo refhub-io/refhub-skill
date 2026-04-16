@@ -104,7 +104,7 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 **Delete vault** — `vaults:admin` + owner
 1. **Warn the user — this is a hard delete with no undo**
 2. Confirm intent explicitly before proceeding
-3. `DELETE /vaults/:vaultId` → `204 No Content`
+3. `DELETE /vaults/:vaultId` → `200 { data: { id } }`
 4. Cascades: all items, tags, shares, and key restrictions for this vault are removed
 
 **Set visibility** — `vaults:admin` + owner
@@ -113,10 +113,10 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 3. `private` clears `public_slug`; adding a share to a `private` vault auto-upgrades it to `protected`
 
 **Manage shares** — `vaults:admin` + owner
-1. List: `GET /vaults/:vaultId/shares`
-2. Add: `POST /vaults/:vaultId/shares` with `{ email?, user_id?, role }` (role: `viewer|editor|owner`)
-3. Update: `PATCH /vaults/:vaultId/shares/:shareId` with `{ role }`
-4. Remove: `DELETE /vaults/:vaultId/shares/:shareId` → `204 No Content`
+1. List: `GET /vaults/:vaultId/shares` — requires only `vaults:read`
+2. Add: `POST /vaults/:vaultId/shares` with `{ email, role, name? }` — `email` is required; role must be `viewer` or `editor`
+3. Update: `PATCH /vaults/:vaultId/shares/:shareId` with `{ role }` — role must be `viewer` or `editor`
+4. Remove: `DELETE /vaults/:vaultId/shares/:shareId` → `200 { data: { id } }`
 
 ---
 
@@ -135,19 +135,20 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 
 **Delete item** — `vaults:write` + editor
 1. **Warn the user — hard delete, no undo**
-2. `DELETE /vaults/:vaultId/items/:itemId` → `204 No Content`
+2. `DELETE /vaults/:vaultId/items/:itemId` → `200 { data: { id } }`
 3. The underlying `publications` row is preserved (shared across vaults)
 
 **Bulk upsert** — `vaults:write` + editor
 1. Always pass an `idempotency_key` for safe retries
 2. `POST /vaults/:vaultId/items/upsert` with `{ items: [...], idempotency_key? }`
-3. Match strategy: DOI first, then title+year
-4. Each item result includes `action: 'created'|'updated'|'skipped'`
-5. A repeated `idempotency_key` within 24h returns the previous result without re-executing
+3. Match strategy: DOI first, then `bibtex_key` — items without either are always created
+4. Response: `{ data: { created: [...], updated: [...], errors: [...] } }`
+5. A repeated `idempotency_key` within **5 minutes** returns the cached result without re-executing
 
 **Import preview (dry-run)** — `vaults:read`
 1. Use before committing a bulk upsert to show what would change
-2. `POST /vaults/:vaultId/items/import-preview` — same body as upsert, writes nothing
+2. `POST /vaults/:vaultId/items/import-preview` with `{ items: [...] }` — writes nothing
+3. Response: `{ data: { would_create: [...], would_update: [...], invalid: [...] } }`
 
 ---
 
@@ -176,7 +177,7 @@ All tag writes require `vaults:write` + editor. Reads require `vaults:read`.
 1. List: `GET /vaults/:vaultId/tags`
 2. Create: `POST /vaults/:vaultId/tags` with `{ name, color?, parent_id? }`
 3. Update: `PATCH /vaults/:vaultId/tags/:tagId` with `{ name?, color?, parent_id? }`
-4. Delete: `DELETE /vaults/:vaultId/tags/:tagId` → `204`; cascades publication_tags; child tags bubble up to deleted tag's parent
+4. Delete: `DELETE /vaults/:vaultId/tags/:tagId` → `200 { data: { id } }`; cascades publication_tags; child tags bubble up to deleted tag's parent
 5. Attach: `POST /vaults/:vaultId/tags/attach` with `{ item_id, tag_ids: [] }` — idempotent
 6. Detach: `POST /vaults/:vaultId/tags/detach` with `{ item_id, tag_ids: [] }` — silently ignores unattached ids
 
@@ -186,10 +187,10 @@ All tag writes require `vaults:write` + editor. Reads require `vaults:read`.
 
 All relation writes require `vaults:write` + editor. Reads require `vaults:read`.
 
-1. List: `GET /vaults/:vaultId/relations?source_id=&target_id=&type=`
-2. Create: `POST /vaults/:vaultId/relations` with `{ publication_id, related_publication_id, relation_type? }` — idempotent; returns existing record with `200` if pair exists
+1. List: `GET /vaults/:vaultId/relations?type=` — only `type` filter is supported
+2. Create: `POST /vaults/:vaultId/relations` with `{ publication_id, related_publication_id, relation_type? }` — both items must belong to the vault; duplicate pair will error
 3. Update: `PATCH /vaults/:vaultId/relations/:relationId` with `{ relation_type }` — only the type is mutable
-4. Delete: `DELETE /vaults/:vaultId/relations/:relationId` → `204`
+4. Delete: `DELETE /vaults/:vaultId/relations/:relationId` → `200 { data: { id } }`
 
 Supported relation types: `cites`, `extends`, `builds_on`, `contradicts`, `reviews`, `related`.
 

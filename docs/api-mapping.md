@@ -84,7 +84,7 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 | Update vault metadata | `PATCH /api/v1/vaults/:vaultId` | `vaults:admin` | owner |
 | Delete vault | `DELETE /api/v1/vaults/:vaultId` | `vaults:admin` | owner |
 | Set vault visibility | `PATCH /api/v1/vaults/:vaultId/visibility` | `vaults:admin` | owner |
-| List collaborators | `GET /api/v1/vaults/:vaultId/shares` | `vaults:admin` | owner |
+| List collaborators | `GET /api/v1/vaults/:vaultId/shares` | `vaults:read` | viewer |
 | Add collaborator | `POST /api/v1/vaults/:vaultId/shares` | `vaults:admin` | owner |
 | Update collaborator role | `PATCH /api/v1/vaults/:vaultId/shares/:shareId` | `vaults:admin` | owner |
 | Remove collaborator | `DELETE /api/v1/vaults/:vaultId/shares/:shareId` | `vaults:admin` | owner |
@@ -165,13 +165,18 @@ Current scopes:
 ## 5. Important constraints inherited from the current API
 
 - Vault delete and item delete are hard deletes — no undo, no restore.
-- Bulk upsert uses DOI-first then title+year matching; pass `idempotency_key` for safe retries.
+- Bulk upsert matches on DOI first, then `bibtex_key`; items with neither are always created. Pass `idempotency_key` for safe retries (TTL: 5 minutes, in-memory).
 - Tag creation is not implicit during item writes — tag IDs must already exist when passed as `tag_ids`.
 - `tag_ids` on item update replaces the full tag set (not additive).
 - Vault access is the combination of ownership, sharing, and optional API-key vault restrictions.
 - Management routes and data routes use different auth models.
 - `vaults:admin` scope must be explicitly requested at API key creation time.
 - When adding a share to a `private` vault, the vault is automatically upgraded to `protected`.
+- Valid share roles are `viewer` and `editor` only — `owner` cannot be set via the API.
+- Share creation requires `email`; `user_id` is not accepted by the current implementation.
+- All delete operations return `200 { data: { id } }` — not `204 No Content`.
+- Relation creation is not idempotent — submitting a duplicate pair will produce an error; check before creating.
+- Relations list only supports `?type=` filter — `source_id` and `target_id` filters are not implemented.
 - DOI import calls Semantic Scholar internally; it will fail if `SEMANTIC_SCHOLAR_API_KEY` is not configured.
 
 ## 6. Practical implication for skill design
