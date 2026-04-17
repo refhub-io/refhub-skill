@@ -21,8 +21,6 @@ All workflows documented below map directly to CLI commands. Agents in environme
 
 Agent-facing runtime skill for the RefHub public API (v2). All workflows execute over HTTP using a scoped API key. No local state, no Supabase direct access, no invented behavior.
 
-> **Status:** This repo is spec-only. No SDK or library implementation exists yet. Agents operate by following this document directly.
-
 ---
 
 ## Use this skill when
@@ -104,6 +102,7 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 1. Confirm `vault_id` is known (list first if not)
 2. `GET /vaults/:vaultId`
 3. Response includes vault metadata, all items, tags, publication_tags, and relations
+4. Each item has an `id` (the `vault_publications` row id used for relations/tags) and an `original_publication_id` (the canonical cross-vault publication id). Use `id` when creating relations or attaching tags.
 
 **Create vault** — `vaults:admin`
 1. Confirm key has `vaults:admin` scope
@@ -120,6 +119,7 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 2. Confirm intent explicitly before proceeding
 3. `DELETE /vaults/:vaultId` → `200 { data: { id } }`
 4. Cascades: all items, tags, shares, and key restrictions for this vault are removed
+5. CLI: `refhub vaults delete <vaultId>` requires `--confirm` flag; exits 2 without it
 
 **Set visibility** — `vaults:admin` + owner
 1. `PATCH /vaults/:vaultId/visibility` with `{ visibility: 'private'|'protected'|'public', public_slug? }`
@@ -140,17 +140,21 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 1. Confirm vault access and that `tag_ids` (if any) already exist in the vault
 2. `POST /vaults/:vaultId/items` with `{ items: [{ title, authors?, year?, doi?, tag_ids?, ... }] }`
 3. Each item must include `title`; `tag_ids` must reference existing vault tags
-4. On partial failure the backend attempts rollback; treat `bulk_insert_partial_failure` as a high-severity error requiring manual review
+4. `authors` is a **string array** (e.g. `["Smith J", "Doe A"]`), not a plain string. The CLI `--authors` flag accepts comma-separated input and converts automatically.
+5. On partial failure the backend attempts rollback; treat `bulk_insert_partial_failure` as a high-severity error requiring manual review
+6. CLI: `refhub items add --vault <id> --title <t> [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--tags <id,id>]`
 
 **Update item** — `vaults:write` + editor
 1. `PATCH /vaults/:vaultId/items/:itemId` with any publication fields
 2. If `tag_ids` is included, it **replaces the full tag set** — not additive
 3. `version` increments automatically on metadata updates
+4. CLI: when using `refhub items update --tags`, a warning is emitted to stderr confirming the full-replacement behaviour before the request is sent
 
 **Delete item** — `vaults:write` + editor
 1. **Warn the user — hard delete, no undo**
 2. `DELETE /vaults/:vaultId/items/:itemId` → `200 { data: { id } }`
 3. The underlying `publications` row is preserved (shared across vaults)
+4. CLI: `refhub items delete` requires `--confirm` flag; exits 2 without it
 
 **Bulk upsert** — `vaults:write` + editor
 1. Always pass an `idempotency_key` for safe retries
@@ -158,6 +162,7 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 3. Match strategy: DOI first, then `bibtex_key` — items without either are always created
 4. Response: `{ data: { created: [...], updated: [...], errors: [...] } }`
 5. A repeated `idempotency_key` within **5 minutes** returns the cached result without re-executing
+6. CLI: `refhub items upsert --vault <id> --file <items.json> [--idempotency-key <key>]` — items.json must be a JSON array of item objects
 
 **Import preview (dry-run)** — `vaults:read`
 1. Use before committing a bulk upsert to show what would change
@@ -203,6 +208,7 @@ All relation writes require `vaults:write` + editor. Reads require `vaults:read`
 
 1. List: `GET /vaults/:vaultId/relations?type=` — only `type` filter is supported
 2. Create: `POST /vaults/:vaultId/relations` with `{ publication_id, related_publication_id, relation_type? }` — both items must belong to the vault; duplicate pair will error
+   - **`publication_id` and `related_publication_id` are the item's `id` field** as returned by the items endpoints (the `vault_publications` row id). They are NOT the canonical `original_publication_id`. Using the wrong id returns `400 invalid_body`.
 3. Update: `PATCH /vaults/:vaultId/relations/:relationId` with `{ relation_type }` — only the type is mutable
 4. Delete: `DELETE /vaults/:vaultId/relations/:relationId` → `200 { data: { id } }`
 
