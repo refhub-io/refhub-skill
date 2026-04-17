@@ -3,6 +3,20 @@ name: refhub-skill
 description: Use when an agent needs to read, write, organize, import, search, export, or audit content in RefHub vaults using a pre-issued RefHub API key. Covers the full v2 public API surface. Do not use for API key creation/revocation, Google Drive management, Semantic Scholar lookups, or any flow that requires a human Supabase session JWT.
 ---
 
+## Execution layer
+
+If the `refhub` CLI is available in the environment (`which refhub` succeeds), use it instead of making HTTP calls directly. The CLI handles authentication, error formatting, and consistent output.
+
+**Setup:** The CLI reads `REFHUB_API_KEY` from the environment. A `--api-key` flag overrides it for one-off calls.
+
+**Command reference:** Run `refhub --help` or `refhub <group> --help` (e.g. `refhub vaults --help`) to see available commands and flags.
+
+**Output:** JSON by default. Pass `--table` for human-readable tables.
+
+**Exit codes:** `0` success · `1` API error · `2` bad arguments · `3` auth error (missing/invalid key)
+
+All workflows documented below map directly to CLI commands. Agents in environments without the CLI may fall back to direct HTTP as documented in the workflow sections.
+
 # RefHub Skill
 
 Agent-facing runtime skill for the RefHub public API (v2). All workflows execute over HTTP using a scoped API key. No local state, no Supabase direct access, no invented behavior.
