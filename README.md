@@ -1,73 +1,79 @@
 # refhub-skill
 
-An agent skill for operating [RefHub](https://refhub.io) through its public API.
+> // agent_skill for [refhub.io](https://refhub.io)
 
-Agents load `SKILL.md` to discover available workflows, then consult `docs/` for exact route contracts and behavioral rules. No implementation code lives here — the skill is the contract.
+agent skill for operating refhub through its public api (v2). agents load `SKILL.md` to discover workflows and consult `docs/` for exact route contracts and behavioral rules. no implementation code — the skill is the contract.
 
-## What agents can do
+---
 
-With a scoped RefHub API key, an agent can:
+## // capabilities
+
+with a scoped refhub api key, an agent can:
 
 - manage vaults (create, update, delete, visibility, collaborators)
-- add, update, delete, search, and bulk-upsert items
-- import references from a DOI, BibTeX string, or URL
+- add, update, delete, search, and bulk-upsert papers
+- import references from a doi, bibtex string, or url
 - manage tags and relations as first-class objects
 - sync incrementally via the changes feed
-- export vaults as JSON or BibTeX
+- export vaults as json or bibtex
 - read audit logs
 
-## Structure
+---
+
+## // structure
 
 ```
 SKILL.md          ← skill entry point
+AGENTS.md         ← instructions for cursor, windsurf, codex, and others
 docs/
   api-mapping.md  ← endpoint/scope/constraint reference
   spec.md         ← per-workflow behavioral contracts
 ```
 
-## Auth
+---
 
-Agents use a pre-issued RefHub API key (`rhk_<publicId>_<secret>`). Key creation and revocation are human-managed through the RefHub UI or management API using a session JWT — not part of the agent runtime.
+## // auth
 
-## Execution layer
+agents use a pre-issued refhub api key (`rhk_<publicId>_<secret>`). key creation and revocation are human-managed through the refhub ui — not part of the agent runtime.
 
-The [`refhub` CLI](https://github.com/refhub/refhub-cli) is the recommended execution layer. Install it from npm:
+---
+
+## // execution layer
+
+the [`refhub` cli](https://github.com/refhub/refhub-cli) is the recommended execution layer:
 
 ```sh
 npm i -g @refhub/cli
 ```
 
-When available in the environment (`which refhub` succeeds), agents use it instead of making HTTP calls directly. The CLI handles authentication, error formatting, and consistent output.
+when available, agents use it instead of making http calls directly. the cli handles authentication, error formatting, and consistent output.
 
 ```sh
-# Auth: set once, used by all commands
 export REFHUB_API_KEY=rhk_<publicId>_<secret>
 
-# Or override per call
-refhub vaults list --api-key rhk_...
+refhub vaults list
+refhub --help               # discover commands
+refhub vaults --help        # group-level help
 ```
 
-Discovery: `refhub --help` or `refhub <group> --help` (e.g. `refhub vaults --help`).
+exit codes: `0` success · `1` api error · `2` bad arguments · `3` auth error.
 
-Exit codes: `0` success · `1` API error · `2` bad arguments · `3` auth error.
+agents without the cli fall back to direct http as documented in `docs/`.
 
-Agents in environments without the CLI fall back to direct HTTP as documented in `docs/`.
+---
 
-## Installing in your agent
+## // install
 
-### Claude Code
+### claude code
 
 ```sh
-# Register the marketplace (once)
 claude plugin marketplace add refhub-io/refhub-marketplace
-
-# Install the skill
 claude plugin install refhub-skill@refhub-marketplace
 ```
 
-The skill will be available in the next session. Claude Code automatically invokes it when you ask it to work with RefHub vaults or items.
+available in the next session. automatically invoked when you ask claude to work with refhub vaults or papers.
 
-### Gemini CLI
+### gemini cli
 
 ```sh
 mkdir -p ~/.gemini/skills/refhub-skill
@@ -75,7 +81,7 @@ curl -o ~/.gemini/skills/refhub-skill/SKILL.md \
   https://raw.githubusercontent.com/refhub-io/refhub-skill/main/SKILL.md
 ```
 
-### OpenCode
+### opencode
 
 ```sh
 mkdir -p ~/.config/opencode/skills/refhub-skill
@@ -83,9 +89,9 @@ curl -o ~/.config/opencode/skills/refhub-skill/SKILL.md \
   https://raw.githubusercontent.com/refhub-io/refhub-skill/main/SKILL.md
 ```
 
-Restart OpenCode to load the skill.
+restart opencode to load the skill.
 
-### Codex CLI
+### codex cli
 
 ```sh
 mkdir -p ~/.codex/skills/refhub-skill
@@ -93,22 +99,22 @@ curl -o ~/.codex/skills/refhub-skill/SKILL.md \
   https://raw.githubusercontent.com/refhub-io/refhub-skill/main/SKILL.md
 ```
 
-### Cursor, Windsurf, and others
+### cursor, windsurf, and others
 
-For agents that support `AGENTS.md`, copy the included file to your project root:
+copy `AGENTS.md` to your project root:
 
 ```sh
 curl -O https://raw.githubusercontent.com/refhub-io/refhub-skill/main/AGENTS.md
 ```
 
-Or add it globally via your agent's rules/settings UI.
+or add it globally via your agent's rules/settings ui.
 
 ---
 
-## Relationship to the broader stack
+## // stack
 
 ```
-RefHub API  →  refhub-skill  →  refhub CLI  →  MCP server (planned)
+refhub api  →  refhub-skill  →  refhub cli  →  mcp server (planned)
 ```
 
-The API is canonical. The skill adapts its surface into agent-friendly workflows without inventing behavior the API does not support.
+the api is canonical. the skill adapts its surface into agent-friendly workflows without inventing behavior the api does not support.
