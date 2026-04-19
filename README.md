@@ -53,6 +53,58 @@ Exit codes: `0` success · `1` API error · `2` bad arguments · `3` auth error.
 
 Agents in environments without the CLI fall back to direct HTTP as documented in `docs/`.
 
+## Installing in your agent
+
+### Claude Code
+
+```sh
+# Register the marketplace (once)
+claude plugin marketplace add refhub-io/refhub-marketplace
+
+# Install the skill
+claude plugin install refhub-skill@refhub-marketplace
+```
+
+The skill will be available in the next session. Claude Code automatically invokes it when you ask it to work with RefHub vaults or items.
+
+### Gemini CLI
+
+```sh
+mkdir -p ~/.gemini/skills/refhub-skill
+curl -o ~/.gemini/skills/refhub-skill/SKILL.md \
+  https://raw.githubusercontent.com/refhub-io/refhub-skill/main/SKILL.md
+```
+
+### OpenCode
+
+```sh
+mkdir -p ~/.config/opencode/skills/refhub-skill
+curl -o ~/.config/opencode/skills/refhub-skill/SKILL.md \
+  https://raw.githubusercontent.com/refhub-io/refhub-skill/main/SKILL.md
+```
+
+Restart OpenCode to load the skill.
+
+### Codex CLI
+
+```sh
+mkdir -p ~/.codex/skills/refhub-skill
+curl -o ~/.codex/skills/refhub-skill/SKILL.md \
+  https://raw.githubusercontent.com/refhub-io/refhub-skill/main/SKILL.md
+```
+
+### Cursor, Windsurf, and others
+
+For agents that support `AGENTS.md`, copy the included file to your project root:
+
+```sh
+curl -O https://raw.githubusercontent.com/refhub-io/refhub-skill/main/AGENTS.md
+```
+
+Or add it globally via your agent's rules/settings UI.
+
+---
+
 ## Relationship to the broader stack
 
 ```
