@@ -31,10 +31,10 @@ Agents use a pre-issued RefHub API key (`rhk_<publicId>_<secret>`). Key creation
 
 ## Execution layer
 
-The `refhub` CLI is the recommended execution layer. Install it from npm:
+The [`refhub` CLI](https://github.com/refhub/refhub-cli) is the recommended execution layer. Install it from npm:
 
 ```sh
-npm install -g refhub-cli
+npm i -g @refhub/cli
 ```
 
 When available in the environment (`which refhub` succeeds), agents use it instead of making HTTP calls directly. The CLI handles authentication, error formatting, and consistent output.
