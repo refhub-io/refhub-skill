@@ -14,7 +14,9 @@ The skill is optimized for:
 - organizing items with tags and relations
 - searching and syncing vault contents incrementally
 - exporting vault contents for downstream tools
-- working safely with scoped API keys
+- enriching incomplete publication metadata from Semantic Scholar
+- uploading PDFs to Google Drive and linking them to publications
+- working safely with scoped API keys and session JWTs
 
 It should not become a second backend, an alternate database contract, or a thin wrapper around every future endpoint.
 
@@ -35,6 +37,8 @@ The skill exposes tasks like:
 - classify items with tags and relations
 - search for items without a full vault download
 - export a vault for local processing
+- enrich vault items with Semantic Scholar metadata
+- upload a PDF to Google Drive and link it to a publication
 
 not generic transport verbs.
 
@@ -85,11 +89,11 @@ Creates and manages RefHub API keys through authenticated management routes (Sup
 
 ### 4.2 Agent using the skill
 
-Uses an existing API key to perform constrained RefHub workflows. Key scope and vault restrictions bound what the agent can do.
+Uses a pre-issued API key for data routes and/or a session JWT for management routes. Key scope and vault restrictions bound what the agent can do on data routes; JWT workflows (enrichment, PDF upload) are bounded by account-level Google Drive linkage.
 
 ### 4.3 RefHub API
 
-Authoritative service for all vault, item, tag, relation, import, search, audit, and export operations.
+Authoritative service for all vault, item, tag, relation, import, search, audit, export, enrichment, and PDF upload operations.
 
 ## 5. Skill goals
 
@@ -114,6 +118,9 @@ The skill supports all workflows already backed by the current public API:
 17. Export a vault as JSON or BibTeX.
 18. Read audit logs for the key's owner, optionally scoped to a vault.
 19. Provide enough response structure for downstream summarization, note generation, or local transformation.
+20. Enrich incomplete vault items by fetching full metadata from Semantic Scholar (requires session JWT).
+21. Upload a PDF to the user's linked Google Drive and link it to the underlying publication (requires session JWT + Drive linked).
+22. Look up Semantic Scholar paper IDs and fetch recommendations, references, and citations for a paper.
 
 ## 6. Non-goals
 
@@ -323,6 +330,51 @@ Endpoints:
 
 Query params: `?since=`, `?until=`, `?limit=` (default 50, max 200), `?page=`.
 
+### 7.24 Enrich items from Semantic Scholar
+
+Intent: fill in missing metadata (abstract, year, authors, venue, citation count) on existing vault items that have a DOI.
+
+Requires: session JWT. Google Drive linkage not needed.
+
+Endpoint: `POST /api/v1/doi-metadata` — body `{ doi }`. Returns full Semantic Scholar metadata or `null` if not found.
+
+Workflow:
+1. Fetch vault items via API key (`GET /vaults/:vaultId/items` or `GET /vaults/:vaultId`).
+2. For each item with a DOI and at least one blank enrichable field, call `POST /doi-metadata` with JWT.
+3. Build a patch from only the fields that are currently blank on the item; skip items that are already complete.
+4. Apply patch via `PATCH /vaults/:vaultId/items/:itemId` with API key.
+5. Rate-limit: 1 request per second to Semantic Scholar.
+
+Skill expectation: support dry-run mode (report what would change without patching). CLI: `refhub enrich --vault <id> [--item <id>] [--dry-run] --jwt <token>`.
+
+### 7.25 Upload PDF to Google Drive
+
+Intent: store a PDF in the user's linked Google Drive folder and record the asset URL against the underlying publication.
+
+Requires: session JWT + Google Drive linked to the account.
+
+Endpoint: `POST /api/v1/publications/:publicationId/pdf` — raw `application/pdf` bytes. Max 26 MB.
+
+- `publicationId` is `original_publication_id` from the vault item, **not** the item's `id`.
+- Returns the stored asset record including the Drive URL.
+- Errors: `404 publication_not_found` · `503 drive_not_linked` · `502 drive_upload_failed`.
+
+Skill expectation: surface the Drive URL from the response so the agent can record or display it. CLI: `refhub pdf upload --publication <id> --file <path.pdf> --jwt <token>`.
+
+### 7.26 Semantic Scholar lookup and graph traversal
+
+Intent: look up a paper's Semantic Scholar ID and explore the citation graph.
+
+Requires: session JWT.
+
+Endpoints:
+- `POST /api/v1/lookup` — body `{ doi }` or `{ title }` → `paper_id`
+- `POST /api/v1/recommendations` — body `{ paper_id, limit? }` → recommended papers
+- `POST /api/v1/references` — body `{ paper_id, limit? }` → papers this paper cites
+- `POST /api/v1/citations` — body `{ paper_id, limit? }` → papers citing this paper
+
+Skill expectation: used as a discovery step before importing new references; agent should offer to add discovered papers to a vault.
+
 ## 8. Failure behavior
 
 The skill should normalize failures into a predictable structure.
@@ -344,14 +396,19 @@ Every surfaced error should keep:
 
 ## 9. Authentication assumptions
 
-The skill should assume:
+The skill uses two credentials — use each for the right route category:
 
-- API key creation and revocation are management concerns outside normal agent runtime
-- normal skill execution uses a pre-issued `rhk_<publicId>_<secret>` key
-- keys may be scope-limited to any combination of `vaults:read`, `vaults:write`, `vaults:export`, `vaults:admin`
-- keys may be vault-restricted
+**API key** (`rhk_<publicId>_<secret>`) — all data routes (vaults, items, tags, relations, import, export, audit):
+- created and revoked by the human owner through the RefHub UI
+- may be scope-limited to any combination of `vaults:read`, `vaults:write`, `vaults:export`, `vaults:admin`
+- may be vault-restricted to a subset of the owner's vaults
 
-The skill should not require a Supabase session JWT for ordinary use.
+**Session JWT** (Supabase JWT) — management routes (Semantic Scholar enrichment, PDF upload, Google Drive, key management):
+- obtained by the human owner via Supabase Auth
+- not scoped; grants full management access for the authenticated user
+- sending an API key to a JWT-only route returns `401 refhub_api_key_not_supported`
+
+For ordinary data workflows (vault reads, item writes, search, export) the skill requires only the API key. Enrichment and PDF upload additionally require a session JWT and must be documented as such to the agent consumer.
 
 ## 10. Skill interface shape
 
@@ -367,6 +424,9 @@ Conceptual operations:
 - `relations.list` / `relations.create` / `relations.update` / `relations.delete`
 - `vaults.export`
 - `audit.list`
+- `enrichment.doiMetadata` / `enrichment.enrichVault` / `enrichment.enrichItem`
+- `publications.uploadPdf`
+- `scholar.lookup` / `scholar.recommendations` / `scholar.references` / `scholar.citations`
 
 These names are stable enough for the spec and can later be mapped onto CLI verbs and MCP tools.
 
@@ -393,6 +453,8 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 - search, stats, and changes feed
 - JSON and BibTeX export
 - audit log read endpoints
+- Semantic Scholar enrichment: `POST /doi-metadata`, `POST /lookup`, `POST /recommendations`, `POST /references`, `POST /citations` (JWT)
+- PDF upload to Google Drive: `POST /publications/:publicationId/pdf` (JWT)
 
 ### Deferred
 

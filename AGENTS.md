@@ -1,6 +1,6 @@
 # RefHub Agent Instructions
 
-Agent-facing instructions for operating [RefHub](https://refhub.io) through its public API (v2). All operations use a scoped API key. No local state, no Supabase direct access, no invented behavior.
+Agent-facing instructions for operating [RefHub](https://refhub.io) through its public API (v2). Covers the full API surface across both auth modes — API key for data routes, session JWT for management routes. No local state, no Supabase direct access, no invented behavior.
 
 ## When to apply these instructions
 
@@ -10,22 +10,26 @@ Apply whenever the user asks you to:
 - create or configure vaults (name, visibility, collaborators)
 - manage tags or relations on vault items
 - sync changes incrementally
+- enrich incomplete publication metadata from Semantic Scholar
+- upload a PDF and store it in the user's linked Google Drive
+- manage API keys or Google Drive settings
 
-Do **not** apply for: API key creation/revocation, Google Drive management, Semantic Scholar lookups — those require a human session JWT and are outside the agent runtime.
+Do **not** apply for features with no API route: vault archiving, item revision history, item move/copy between vaults, webhooks.
 
 ## Execution layer
 
 If the `refhub` CLI is available (`which refhub` succeeds), use it instead of making HTTP calls directly.
 
 ```sh
-export REFHUB_API_KEY=rhk_<publicId>_<secret>
+export REFHUB_API_KEY=rhk_<publicId>_<secret>   # for data routes
+export REFHUB_JWT=<supabase-session-jwt>          # for enrich and pdf upload
 refhub --help            # discover commands
 refhub vaults --help     # group-level help
 ```
 
 Exit codes: `0` success · `1` API error · `2` bad arguments · `3` auth error.
 
-Fall back to direct HTTP (base URL: `https://refhub-api.netlify.app/api/v1`) when the CLI is not available.
+The CLI covers all data routes plus `refhub enrich` and `refhub pdf upload`. For other management routes (Google Drive, key management) fall back to direct HTTP (base URL: `https://refhub-api.netlify.app/api/v1`).
 
 ## Authentication
 
@@ -36,12 +40,12 @@ Two modes — never mix them.
 Authorization: Bearer rhk_<publicId>_<secret>
 ```
 
-**Session JWT** (management routes only — key lifecycle, Google Drive, Semantic Scholar):
+**Session JWT** (management routes — key lifecycle, Google Drive, Semantic Scholar enrichment, PDF upload):
 ```
 Authorization: Bearer <supabase-session-jwt>
 ```
 
-Sending an API key to a management route returns `401 refhub_api_key_not_supported`. Do not retry with the same key.
+Sending an API key to a management route returns `401 refhub_api_key_not_supported`. Switch to JWT for that call — do not retry with the API key.
 
 **Scope requirements:**
 
@@ -57,7 +61,7 @@ If a credential is missing or has insufficient scope: stop, report clearly, ask 
 ## Guardrails — follow these without exception
 
 - **Never infer `vault_id` from a vault name.** Always call `GET /vaults` and resolve it from the response.
-- **Never mix JWT and API key auth.** Management routes reject API keys; data routes do not accept JWTs.
+- **Use the right auth for the right route.** Management routes (Semantic Scholar, PDF upload, key management, Google Drive) require a session JWT and reject API keys with `401 refhub_api_key_not_supported`. Data routes require an API key.
 - **Never assume a tag exists.** List tags before using `tag_ids` in any write.
 - **Never create tags implicitly during item writes.** Tag creation is a separate step.
 - **Never retry a bulk write after ambiguous failure** unless you have an `idempotency_key`.
@@ -156,6 +160,33 @@ GET    /vaults/:vaultId/changes?since=      # items updated after ISO timestamp 
 
 - `limit` default 20, max 100
 
+### Semantic Scholar enrichment and lookup
+
+These routes require a **session JWT**.
+
+```
+POST   /doi-metadata          # { doi } → full metadata; null if not found
+POST   /lookup                # { doi } or { title } → Semantic Scholar paper_id
+POST   /recommendations       # { paper_id, limit? } → recommended papers
+POST   /references            # { paper_id, limit? } → papers this paper cites
+POST   /citations             # { paper_id, limit? } → papers citing this paper
+```
+
+**Enrichment workflow:** fetch items with a DOI from the vault (API key), call `/doi-metadata` for each (JWT), patch only blank fields back with `PATCH /vaults/:vaultId/items/:itemId` (API key). Rate limit: 1 req/s. CLI: `refhub enrich --vault <id> [--item <id>] [--dry-run] --jwt <token>`.
+
+### PDF upload
+
+Requires a **session JWT** and Google Drive linked to the account.
+
+```
+POST   /publications/:publicationId/pdf    # raw application/pdf bytes → stored in Drive
+```
+
+- `publicationId` is `original_publication_id` from the vault item, not the item's `id`
+- Max 26 MB
+- CLI: `refhub pdf upload --publication <id> --file <path.pdf> --jwt <token>`
+- Errors: `404 publication_not_found` · `503 drive_not_linked` · `502 drive_upload_failed`
+
 ### Export and audit
 
 ```
@@ -183,13 +214,10 @@ GET    /audit?since=&until=&limit=&page=            # global (JWT only)
 
 Every error response includes `error.code`, `error.message`, and `meta.request_id`. Always surface `request_id` when reporting failures.
 
-## Out of scope
+## Not yet implemented
 
 Do not attempt these — the current public API does not support them:
 
-- API key creation, rotation, or revocation
-- Google Drive link management
-- Semantic Scholar lookups, recommendations, references, citations
 - Vault archiving, soft-delete, or restore
 - Item revision history or restore
 - Item move or copy between vaults

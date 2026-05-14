@@ -165,7 +165,12 @@ Current scopes:
 | `import.doi` / `bibtex` / `url` | `vaults:write` |
 | `vaults.stats` / `changes` / `search` | `vaults:read` |
 | `vaults.export` | `vaults:export` |
-| `audit.list` | any valid API key |
+| `audit.list` (vault-scoped) | any valid API key |
+| `audit.list` (global) | JWT (management) |
+| `enrichment.doiMetadata` | JWT (management) |
+| `enrichment.enrichVault` / `enrichment.enrichItem` | JWT + `vaults:write` (read via API key, patch via API key) |
+| `publications.uploadPdf` | JWT (management) |
+| `scholar.lookup` / `recommendations` / `references` / `citations` | JWT (management) |
 
 ## 5. Important constraints inherited from the current API
 
@@ -183,6 +188,10 @@ Current scopes:
 - Relation creation is not idempotent — submitting a duplicate pair will produce an error; check before creating.
 - Relations list only supports `?type=` filter — `source_id` and `target_id` filters are not implemented.
 - DOI import calls Semantic Scholar internally; it will fail if `SEMANTIC_SCHOLAR_API_KEY` is not configured.
+- Semantic Scholar enrichment routes (`/doi-metadata`, `/lookup`, `/recommendations`, `/references`, `/citations`) require a session JWT — API keys are rejected with `401 refhub_api_key_not_supported`.
+- Semantic Scholar rate limit: 1 request per second. The enrichment workflow must sleep between calls when processing multiple items.
+- PDF upload (`POST /publications/:publicationId/pdf`) requires a session JWT and Google Drive linked to the account. `publicationId` is `original_publication_id` from the vault item, not the item's `id`. Max file size: 26 MB. Returns `503 drive_not_linked` if Drive has not been connected.
+- Google Drive link management (`GET/POST/DELETE /google-drive`) is a separate JWT management workflow outside the normal agent-facing skill surface.
 
 ## 6. Practical implication for skill design
 

@@ -8,7 +8,7 @@ agent skill for operating refhub through its public api (v2). agents load `SKILL
 
 ## // capabilities
 
-with a scoped refhub api key, an agent can:
+with a scoped refhub api key and/or a session jwt, an agent can:
 
 - manage vaults (create, update, delete, visibility, collaborators)
 - add, update, delete, search, and bulk-upsert papers
@@ -17,6 +17,8 @@ with a scoped refhub api key, an agent can:
 - sync incrementally via the changes feed
 - export vaults as json or bibtex
 - read audit logs
+- enrich incomplete publication metadata from semantic scholar (jwt)
+- upload pdfs to google drive and link them to publications (jwt)
 
 ---
 
@@ -34,7 +36,19 @@ docs/
 
 ## // auth
 
-agents use a pre-issued refhub api key (`rhk_<publicId>_<secret>`). key creation and revocation are human-managed through the refhub ui — not part of the agent runtime.
+two modes — use the right one for the right route:
+
+**api key** — all data routes (vaults, items, tags, relations, import, export, audit):
+```
+REFHUB_API_KEY=rhk_<publicId>_<secret>
+```
+
+**session jwt** — management routes (semantic scholar enrichment, pdf upload, google drive, key management):
+```
+REFHUB_JWT=<supabase-session-jwt>
+```
+
+key creation and revocation are human-managed through the refhub ui.
 
 ---
 
@@ -49,16 +63,18 @@ npm i -g @refhub/cli
 when available, agents use it instead of making http calls directly. the cli handles authentication, error formatting, and consistent output.
 
 ```sh
-export REFHUB_API_KEY=rhk_<publicId>_<secret>
+export REFHUB_API_KEY=rhk_<publicId>_<secret>   # data routes
+export REFHUB_JWT=<supabase-session-jwt>          # enrich + pdf upload
 
 refhub vaults list
-refhub --help               # discover commands
-refhub vaults --help        # group-level help
+refhub enrich --vault <id> --jwt <token>          # semantic scholar enrichment
+refhub pdf upload --publication <id> --file <f>  # pdf → google drive
+refhub --help               # discover all commands
 ```
 
 exit codes: `0` success · `1` api error · `2` bad arguments · `3` auth error.
 
-agents without the cli fall back to direct http as documented in `docs/`.
+the cli covers all data routes plus `enrich` and `pdf upload`. for other management routes (google drive, key management) fall back to direct http as documented in `docs/`.
 
 ---
 
