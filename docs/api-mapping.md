@@ -15,7 +15,9 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 - `POST   /api/v1/references`                              Semantic Scholar (JWT-only)
 - `POST   /api/v1/citations`                               Semantic Scholar (JWT-only)
 - `POST   /api/v1/lookup`                                  Semantic Scholar (JWT-only)
+- `POST   /api/v1/doi-metadata`                            Semantic Scholar DOI enrichment (JWT-only)
 - `GET/POST/DELETE /api/v1/google-drive`                   Drive link management (JWT-only)
+- `POST   /api/v1/publications/:publicationId/pdf`         upload PDF to Drive (JWT-only)
 
 ### Data routes (RefHub API key)
 
@@ -112,8 +114,14 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 | Export vault | `GET /api/v1/vaults/:vaultId/export?format=` | `vaults:export` | viewer |
 | Read vault audit log | `GET /api/v1/vaults/:vaultId/audit` | any API key | viewer |
 | Read global audit log | `GET /api/v1/audit` | JWT (management) | — |
+| Enrich publication metadata from Semantic Scholar | `POST /api/v1/doi-metadata` then `PATCH /api/v1/vaults/:vaultId/items/:itemId` | JWT + `vaults:write` | editor |
+| Look up Semantic Scholar paper id | `POST /api/v1/lookup` | JWT (management) | — |
+| Get paper recommendations | `POST /api/v1/recommendations` | JWT (management) | — |
+| Get paper references | `POST /api/v1/references` | JWT (management) | — |
+| Get paper citations | `POST /api/v1/citations` | JWT (management) | — |
+| Upload PDF to Google Drive for a publication | `POST /api/v1/publications/:publicationId/pdf` | JWT (management) | — |
 
-## 3. Workflows currently outside the public API surface
+## 3. Workflows not yet implemented
 
 | Desired workflow | Status | Notes |
 | --- | --- | --- |
@@ -124,9 +132,6 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 | Item move/copy between vaults | not implemented | No API route |
 | Webhooks / event delivery | not implemented | Deferred to future cycle |
 | Bulk relation import | not implemented | Create individually |
-| Audit log viewer in frontend | not implemented | Tracked as frontend TODO |
-| DOI enrichment from data routes | management-route only | `POST /api/v1/doi-metadata` exists but is JWT-only in the Semantic Scholar path; DOI *import* via `import/doi` is available |
-| API key creation/revocation at runtime | JWT-only | Intentional: setup/admin flow |
 
 ## 4. Scope mapping (v2)
 

@@ -1,11 +1,11 @@
 ---
 name: refhub-skill
-description: Use when an agent needs to read, write, organize, import, search, export, or audit content in RefHub vaults using a pre-issued RefHub API key. Covers the full v2 public API surface. Do not use for API key creation/revocation, Google Drive management, Semantic Scholar lookups, or any flow that requires a human Supabase session JWT.
+description: Use when an agent needs to interact with RefHub — reading, writing, importing, searching, exporting, or auditing vault content; enriching publication metadata from Semantic Scholar; uploading PDFs to Google Drive; or managing vaults and API keys. Covers the full v2 API surface across both auth modes (API key for data routes, session JWT for management routes).
 ---
 
 ## Execution layer
 
-If the `refhub` CLI is available in the environment (`which refhub` succeeds), use it instead of making HTTP calls directly. The CLI handles authentication, error formatting, and consistent output.
+If the `refhub` CLI is available in the environment (`which refhub` succeeds), use it for **API key (data) routes** — it handles authentication, error formatting, and consistent output.
 
 **Setup:** The CLI reads `REFHUB_API_KEY` from the environment. A `--api-key` flag overrides it for one-off calls.
 
@@ -15,11 +15,11 @@ If the `refhub` CLI is available in the environment (`which refhub` succeeds), u
 
 **Exit codes:** `0` success · `1` API error · `2` bad arguments · `3` auth error (missing/invalid key)
 
-All workflows documented below map directly to CLI commands. Agents in environments without the CLI may fall back to direct HTTP as documented in the workflow sections.
+**JWT workflows:** Use `refhub enrich` and `refhub pdf upload` for Semantic Scholar enrichment and PDF upload — both accept `--jwt <token>` or read `REFHUB_JWT` from the environment. Other management routes (Google Drive, key management) have no CLI command; make direct HTTP calls for those as documented in the workflow sections below.
 
 # RefHub Skill
 
-Agent-facing runtime skill for the RefHub public API (v2). All workflows execute over HTTP using a scoped API key. No local state, no Supabase direct access, no invented behavior.
+Agent-facing runtime skill for the RefHub public API (v2). Covers the full API surface across both auth modes — API key for all data routes, session JWT for management routes. No local state, no Supabase direct access, no invented behavior.
 
 ---
 
@@ -30,13 +30,15 @@ Agent-facing runtime skill for the RefHub public API (v2). All workflows execute
 - creating or configuring vaults (name, visibility, collaborators)
 - managing tags or relations on vault items
 - exporting a vault or syncing changes incrementally
+- enriching incomplete publication metadata using Semantic Scholar (doi-metadata)
+- uploading a PDF and storing it in the user's linked Google Drive
+- managing API keys or Google Drive settings
 - checking whether a RefHub workflow is supported by the current public API
 
 ## Do NOT use this skill when
 
-- the requested action requires a Supabase session JWT (key management, Google Drive, Semantic Scholar lookups)
-- the user asks to use a frontend-only feature with no public API route
-- no API key is available — stop and request one before proceeding
+- the user asks to use a frontend-only feature with no public API route (e.g. vault archiving, item revision history)
+- no credentials are available — stop and ask for an API key and/or session JWT before proceeding
 
 ---
 
@@ -69,19 +71,22 @@ Use this for all vault, item, tag, relation, import, search, export, and audit o
 
 Keys may also be **vault-restricted** — they can only operate on the vault IDs set at creation time. Check `vault_ids` on the key record.
 
-### Mode 2 — Session JWT (management routes only)
+### Mode 2 — Session JWT (management routes)
 
 ```
 Authorization: Bearer <supabase-session-jwt>
 ```
 
-Use only for: `GET/POST/DELETE /api/v1/keys`, Semantic Scholar routes, Google Drive routes, `GET /api/v1/audit`.
+Required for: key management (`/keys`), Semantic Scholar routes (`recommendations`, `references`, `citations`, `lookup`, `doi-metadata`), Google Drive routes, PDF upload (`POST /publications/:publicationId/pdf`), and global audit (`GET /audit`).
 
-**If an API key (`rhk_...`) is sent to a management route, the API returns `401 refhub_api_key_not_supported`.** This is expected. Do not retry with the same key.
+Session JWTs come from the user's active Supabase session. If one is not available in the environment, ask the user to provide it or to perform the action through the RefHub web app.
+
+**If an API key (`rhk_...`) is sent to a management route, the API returns `401 refhub_api_key_not_supported`.** This is expected. Switch to JWT for that call.
 
 ### When credentials are missing or insufficient
 
-- No key present → stop, report `auth_error`, ask the user to provide an API key
+- No API key for a data route → stop, report `auth_error`, ask the user to provide an API key
+- No session JWT for a management route → ask the user to provide their session token or perform the action in the web app
 - Wrong scope → report `permission_error` with the missing scope; do not attempt workarounds
 - Key vault-restricted and target vault not in restriction list → report `permission_error`; do not try a different vault silently
 
@@ -189,6 +194,60 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 
 ---
 
+### Metadata enrichment via Semantic Scholar
+
+These routes require a **session JWT**. Use them to fill in missing or incomplete fields on existing publications, or to look up a paper before adding it.
+
+**Enrich a publication with a DOI** — session JWT
+1. Identify items in a vault that have a DOI but are missing fields (abstract, authors, year, venue)
+2. `POST /doi-metadata` with `{ doi: "10.xxxx/xxxxx" }`
+3. Response `data` contains `{ title, authors, year, journal, doi, url, abstract, type }` — `null` if the DOI is not found in Semantic Scholar
+4. For each field that is missing on the vault item and present in the response, patch it: `PATCH /vaults/:vaultId/items/:itemId` (API key, `vaults:write`)
+5. Skip items where `doi-metadata` returns `null` — Semantic Scholar does not have every paper
+
+**Bulk enrichment workflow**
+1. `GET /vaults/:vaultId` (API key) — collect all items with a DOI and missing fields
+2. For each DOI, `POST /doi-metadata` (JWT) — respect the per-user rate limit (1 req/s); back off on `429`
+3. Patch only the fields that were blank — do not overwrite values the user has already set
+4. Report a summary: how many items enriched, how many DOIs not found
+
+**Paper lookup by DOI or title** — session JWT
+1. `POST /lookup` with `{ doi }` or `{ title }` — returns a Semantic Scholar `paper_id`
+2. Use the `paper_id` with `POST /recommendations`, `/references`, or `/citations` to discover related work
+3. `POST /recommendations` / `/references` / `/citations` with `{ paper_id, limit? }` (1–25) — returns normalized paper records
+
+---
+
+### PDF upload to Google Drive
+
+Requires a **session JWT** and Google Drive linked for the account. Stores the PDF in the user's Drive and creates an asset record linked to the publication.
+
+**Upload a PDF for a publication** — session JWT
+1. Confirm the user's Google Drive is linked (if uncertain, the upload will fail with `503 drive_not_linked`)
+2. Get the `original_publication_id` from the vault item — this is the `publicationId` for the upload route (distinct from the vault item's `id`)
+3. `POST /publications/:publicationId/pdf` with the raw PDF bytes as the request body
+   - `Content-Type: application/pdf`
+   - Body: raw PDF bytes (not base64, not multipart)
+   - Max size: 26 MB by default (`GOOGLE_DRIVE_MAX_UPLOAD_BYTES` server config)
+4. Response on success:
+   ```json
+   {
+     "data": {
+       "stored": true,
+       "provider": "google_drive",
+       "fileId": "...",
+       "pdfUrl": "https://drive.google.com/file/d/.../view",
+       "folderId": "...",
+       "folderName": "refhub"
+     }
+   }
+   ```
+5. The asset record is automatically linked to the publication — no further step needed
+
+Errors: `404 publication_not_found` (wrong id or not owned by the user) · `503 drive_not_linked` · `502 drive_upload_failed` · `413` if the file exceeds the server limit.
+
+---
+
 ### Tags
 
 All tag writes require `vaults:write` + editor. Reads require `vaults:read`.
@@ -275,7 +334,7 @@ Every error response includes `error.code`, `error.message`, and `meta.request_i
 ## Guardrails
 
 - **Never infer `vault_id` from a vault name.** Always call `GET /vaults` and resolve it from the response.
-- **Never mix JWT and API key auth.** Management routes reject API keys. Data routes do not accept JWTs.
+- **Use the right auth for the right route.** Management routes (Semantic Scholar, PDF upload, key management, Google Drive) require a session JWT and will reject API keys with `401 refhub_api_key_not_supported`. Data routes require an API key.
 - **Never assume a tag exists.** List tags before using `tag_ids` in any write.
 - **Never create tags implicitly during item writes.** Tag creation is a separate step.
 - **Never retry a bulk write after ambiguous failure** unless you have an `idempotency_key`.
@@ -286,20 +345,18 @@ Every error response includes `error.code`, `error.message`, and `meta.request_i
 
 ---
 
-## Scope boundary
+## Not yet implemented
 
-The following are explicitly outside this skill:
+The following have no API route and cannot be performed through this skill:
 
-- API key creation, rotation, or revocation (requires human session JWT)
-- Google Drive link management (JWT-only management route)
-- Semantic Scholar paper lookup, recommendations, references, citations (JWT-only)
-- Vault archiving, soft-delete, or restore (not implemented in the API)
-- Item revision history or restore (not implemented)
-- Item move or copy between vaults (not implemented)
-- Webhooks or event subscriptions (not implemented)
+- Vault archiving, soft-delete, or restore
+- Item revision history or restore
+- Item move or copy between vaults
+- Webhooks or event subscriptions
+- Bulk relation import (create individually)
 - Any direct Supabase access as a fallback
 
-If a user requests one of these, state clearly that the current public API does not support it and do not improvise an alternative.
+If a user requests one of these, state clearly that the feature is not yet available in the public API and do not improvise an alternative.
 
 ---
 
