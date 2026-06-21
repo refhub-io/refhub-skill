@@ -8,7 +8,7 @@ agent skill for operating refhub through its public api (v2). agents load `SKILL
 
 ## // capabilities
 
-with a scoped refhub api key and/or a session jwt, an agent can:
+with a scoped refhub api key for normal runtime work, an agent can:
 
 - manage vaults (create, update, delete, visibility, collaborators)
 - add, update, delete, search, and bulk-upsert papers
@@ -17,8 +17,8 @@ with a scoped refhub api key and/or a session jwt, an agent can:
 - sync incrementally via the changes feed
 - export vaults as json or bibtex
 - read audit logs
-- enrich incomplete publication metadata from semantic scholar (jwt)
-- upload pdfs to google drive and link them to publications (jwt)
+- enrich incomplete publication metadata from semantic scholar (api key)
+- upload pdfs to google drive and link them to vault items (api key after Drive is connected)
 
 ---
 
@@ -43,12 +43,7 @@ two modes — use the right one for the right route:
 REFHUB_API_KEY=rhk_<publicId>_<secret>
 ```
 
-**session jwt** — management routes (semantic scholar enrichment, pdf upload, google drive, key management):
-```
-REFHUB_JWT=<supabase-session-jwt>
-```
-
-key creation and revocation are human-managed through the refhub ui.
+**session jwt** — setup/admin routes only (google drive link management, key management, global audit). These are normally handled through the RefHub UI; do not require a session JWT for ordinary CLI agent workflows.
 
 ---
 
@@ -64,11 +59,9 @@ when available, agents use it instead of making http calls directly. the cli han
 
 ```sh
 export REFHUB_API_KEY=rhk_<publicId>_<secret>   # data routes
-export REFHUB_JWT=<supabase-session-jwt>          # enrich + pdf upload
-
 refhub vaults list
-refhub enrich --vault <id> --jwt <token>          # semantic scholar enrichment
-refhub pdf upload --publication <id> --file <f>  # pdf → google drive
+refhub enrich --vault <id>                       # semantic scholar enrichment
+refhub pdf upload --vault <id> --item <id> --file <f>  # pdf → google drive
 refhub --help               # discover all commands
 ```
 
@@ -134,3 +127,13 @@ refhub api  →  refhub-skill  →  refhub cli  →  mcp server (planned)
 ```
 
 the api is canonical. the skill adapts its surface into agent-friendly workflows without inventing behavior the api does not support.
+
+
+## API-key Semantic Scholar and PDF workflows (2026-06)
+
+Normal agent runtime is API-key-only:
+
+- Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
+- Item PDF upload: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with raw `application/pdf` bytes; requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.

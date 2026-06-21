@@ -1,6 +1,6 @@
 ---
 name: refhub-skill
-description: Use when an agent needs to read, write, organize, import, search, export, or audit content in RefHub vaults using a pre-issued RefHub API key. Covers the full v2 public API surface. Do not use for API key creation/revocation, Google Drive management, Semantic Scholar lookups, or any flow that requires a human Supabase session JWT.
+description: Use when an agent needs to read, write, organize, import, search, export, or audit content in RefHub vaults using a pre-issued RefHub API key. Covers the full v2 public API surface. Do not use for API key creation/revocation, Google Drive link management, or global audit flows that require a human Supabase session JWT.
 ---
 
 ## Execution layer
@@ -34,7 +34,7 @@ Agent-facing runtime skill for the RefHub public API (v2). All workflows execute
 
 ## Do NOT use this skill when
 
-- the requested action requires a Supabase session JWT (key management, Google Drive, Semantic Scholar lookups)
+- the requested action requires a Supabase session JWT (key management, Google Drive link management, global audit)
 - the user asks to use a frontend-only feature with no public API route
 - no API key is available — stop and request one before proceeding
 
@@ -56,7 +56,7 @@ or equivalently:
 X-API-Key: rhk_<publicId>_<secret>
 ```
 
-Use this for all vault, item, tag, relation, import, search, export, and audit operations.
+Use this for all vault, item, tag, relation, import, search, export, vault audit, Semantic Scholar discovery/enrichment, and item PDF upload operations.
 
 **Scope requirements by operation:**
 
@@ -75,7 +75,7 @@ Keys may also be **vault-restricted** — they can only operate on the vault IDs
 Authorization: Bearer <supabase-session-jwt>
 ```
 
-Use only for: `GET/POST/DELETE /api/v1/keys`, Semantic Scholar routes, Google Drive routes, `GET /api/v1/audit`.
+Use only for: `GET/POST/DELETE /api/v1/keys`, legacy frontend Semantic Scholar root routes, Google Drive link-management routes, `GET /api/v1/audit`.
 
 **If an API key (`rhk_...`) is sent to a management route, the API returns `401 refhub_api_key_not_supported`.** This is expected. Do not retry with the same key.
 
@@ -220,8 +220,8 @@ Supported relation types: `cites`, `extends`, `builds_on`, `contradicts`, `revie
 
 All require `vaults:read` + viewer.
 
-**Search items:** `GET /vaults/:vaultId/search?q=&author=&year=&doi=&tag_id=&type=&page=&limit=`
-- `limit` default 20, max 100
+**Search items:** `GET /vaults/:vaultId/search?q=&author=&year=&doi=&tag=&type=&page=&per_page=`
+- `per_page` default 25, max 100
 - `q` is case-insensitive substring match across title, abstract, authors
 
 **Stats:** `GET /vaults/:vaultId/stats`
@@ -247,9 +247,9 @@ Returns attachment-style serialized content. Preserve the raw payload; do not re
 
 Requires any valid API key (data route for vault-scoped; JWT for global).
 
-- Vault-scoped: `GET /vaults/:vaultId/audit?since=&until=&limit=&page=`
-- Global (JWT only): `GET /audit?since=&until=&limit=&page=`
-- `limit` default 50, max 200
+- Vault-scoped: `GET /vaults/:vaultId/audit?since=&until=&per_page=&page=`
+- Global (JWT only): `GET /audit?since=&until=&per_page=&page=`
+- `per_page` default 25, max 100
 
 ---
 
@@ -275,7 +275,7 @@ Every error response includes `error.code`, `error.message`, and `meta.request_i
 ## Guardrails
 
 - **Never infer `vault_id` from a vault name.** Always call `GET /vaults` and resolve it from the response.
-- **Never mix JWT and API key auth.** Management routes reject API keys. Data routes do not accept JWTs.
+- **Never mix JWT and API key auth.** Management/setup routes reject API keys. API-key data routes include `/semantic-scholar/*` and item-scoped PDF upload.
 - **Never assume a tag exists.** List tags before using `tag_ids` in any write.
 - **Never create tags implicitly during item writes.** Tag creation is a separate step.
 - **Never retry a bulk write after ambiguous failure** unless you have an `idempotency_key`.
@@ -292,7 +292,7 @@ The following are explicitly outside this skill:
 
 - API key creation, rotation, or revocation (requires human session JWT)
 - Google Drive link management (JWT-only management route)
-- Semantic Scholar paper lookup, recommendations, references, citations (JWT-only)
+- API key creation/revocation, Google Drive link management, and global audit (JWT-only)
 - Vault archiving, soft-delete, or restore (not implemented in the API)
 - Item revision history or restore (not implemented)
 - Item move or copy between vaults (not implemented)
@@ -307,3 +307,13 @@ If a user requests one of these, state clearly that the current public API does 
 
 - `docs/api-mapping.md` — full endpoint table with scopes, permissions, and constraints
 - `docs/spec.md` — detailed per-workflow behavioral contracts and edge cases
+
+
+## API-key Semantic Scholar and PDF workflows (2026-06)
+
+Normal agent runtime is API-key-only:
+
+- Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
+- Item PDF upload: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with raw `application/pdf` bytes; requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.

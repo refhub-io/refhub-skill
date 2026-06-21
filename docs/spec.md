@@ -118,7 +118,7 @@ The skill supports all workflows already backed by the current public API:
 17. Export a vault as JSON or BibTeX.
 18. Read audit logs for the key's owner, optionally scoped to a vault.
 19. Provide enough response structure for downstream summarization, note generation, or local transformation.
-20. Enrich incomplete vault items by fetching full metadata from Semantic Scholar (requires session JWT).
+20. Enrich incomplete vault items by fetching full metadata from Semantic Scholar (requires API key with `vaults:read`; patching requires `vaults:write`).
 21. Upload a PDF to the user's linked Google Drive and link it to the underlying publication (requires session JWT + Drive linked).
 22. Look up Semantic Scholar paper IDs and fetch recommendations, references, and citations for a paper.
 
@@ -294,7 +294,7 @@ Intent: answer narrow questions without downloading a full vault.
 
 Endpoints: `GET /api/v1/vaults/:vaultId/search` or `GET /api/v1/vaults/:vaultId/items`
 
-Query params: `?q=`, `?author=`, `?year=`, `?doi=`, `?tag_id=`, `?type=`, `?page=`, `?limit=` (default 20, max 100). Returns paginated items with their `tag_ids`.
+Query params: `?q=`, `?author=`, `?year=`, `?doi=`, `?tag=`, `?type=`, `?page=`, `?per_page=` (`limit`/`tag_id` aliases are accepted) (default 20, max 100). Returns paginated items with their `tag_ids`.
 
 ### 7.20 Vault stats
 
@@ -334,44 +334,44 @@ Query params: `?since=`, `?until=`, `?limit=` (default 50, max 200), `?page=`.
 
 Intent: fill in missing metadata (abstract, year, authors, venue, citation count) on existing vault items that have a DOI.
 
-Requires: session JWT. Google Drive linkage not needed.
+Requires: API key with `vaults:read`. Google Drive linkage not needed.
 
-Endpoint: `POST /api/v1/doi-metadata` — body `{ doi }`. Returns full Semantic Scholar metadata or `null` if not found.
+Endpoint: `POST /api/v1/semantic-scholar/doi-metadata` — body `{ doi }`. Returns full Semantic Scholar metadata or `null` if not found.
 
 Workflow:
 1. Fetch vault items via API key (`GET /vaults/:vaultId/items` or `GET /vaults/:vaultId`).
-2. For each item with a DOI and at least one blank enrichable field, call `POST /doi-metadata` with JWT.
+2. For each item with a DOI and at least one blank enrichable field, call `POST /semantic-scholar/doi-metadata` with the API key.
 3. Build a patch from only the fields that are currently blank on the item; skip items that are already complete.
 4. Apply patch via `PATCH /vaults/:vaultId/items/:itemId` with API key.
 5. Rate-limit: 1 request per second to Semantic Scholar.
 
-Skill expectation: support dry-run mode (report what would change without patching). CLI: `refhub enrich --vault <id> [--item <id>] [--dry-run] --jwt <token>`.
+Skill expectation: support dry-run mode (report what would change without patching). CLI: `refhub enrich --vault <id> [--item <id>] [--dry-run] `.
 
 ### 7.25 Upload PDF to Google Drive
 
 Intent: store a PDF in the user's linked Google Drive folder and record the asset URL against the underlying publication.
 
-Requires: session JWT + Google Drive linked to the account.
+Requires: API key with `vaults:write` + Google Drive linked to the account through the web UI.
 
-Endpoint: `POST /api/v1/publications/:publicationId/pdf` — raw `application/pdf` bytes. Max 26 MB.
+Endpoint: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` — raw `application/pdf` bytes. Max 26 MB.
 
-- `publicationId` is `original_publication_id` from the vault item, **not** the item's `id`.
+- use the vault item id in the route.
 - Returns the stored asset record including the Drive URL.
 - Errors: `404 publication_not_found` · `503 drive_not_linked` · `502 drive_upload_failed`.
 
-Skill expectation: surface the Drive URL from the response so the agent can record or display it. CLI: `refhub pdf upload --publication <id> --file <path.pdf> --jwt <token>`.
+Skill expectation: surface the Drive URL from the response so the agent can record or display it. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 
 ### 7.26 Semantic Scholar lookup and graph traversal
 
 Intent: look up a paper's Semantic Scholar ID and explore the citation graph.
 
-Requires: session JWT.
+Requires: API key with `vaults:read`.
 
 Endpoints:
-- `POST /api/v1/lookup` — body `{ doi }` or `{ title }` → `paper_id`
-- `POST /api/v1/recommendations` — body `{ paper_id, limit? }` → recommended papers
-- `POST /api/v1/references` — body `{ paper_id, limit? }` → papers this paper cites
-- `POST /api/v1/citations` — body `{ paper_id, limit? }` → papers citing this paper
+- `POST /api/v1/semantic-scholar/lookup` — body `{ doi }` or `{ title }` → `paper_id`
+- `POST /api/v1/semantic-scholar/recommendations` — body `{ paper_id, limit? }` → recommended papers
+- `POST /api/v1/semantic-scholar/references` — body `{ paper_id, limit? }` → papers this paper cites
+- `POST /api/v1/semantic-scholar/citations` — body `{ paper_id, limit? }` → papers citing this paper
 
 Skill expectation: used as a discovery step before importing new references; agent should offer to add discovered papers to a vault.
 
@@ -403,12 +403,12 @@ The skill uses two credentials — use each for the right route category:
 - may be scope-limited to any combination of `vaults:read`, `vaults:write`, `vaults:export`, `vaults:admin`
 - may be vault-restricted to a subset of the owner's vaults
 
-**Session JWT** (Supabase JWT) — management routes (Semantic Scholar enrichment, PDF upload, Google Drive, key management):
+**Session JWT** (Supabase JWT) — management routes (Google Drive link management, key management):
 - obtained by the human owner via Supabase Auth
 - not scoped; grants full management access for the authenticated user
 - sending an API key to a JWT-only route returns `401 refhub_api_key_not_supported`
 
-For ordinary data workflows (vault reads, item writes, search, export) the skill requires only the API key. Enrichment and PDF upload additionally require a session JWT and must be documented as such to the agent consumer.
+For ordinary data workflows (vault reads, item writes, search, export) the skill requires only the API key. Enrichment and item-scoped PDF upload are API-key workflows; only account setup/admin remains JWT/browser-only.
 
 ## 10. Skill interface shape
 
@@ -453,8 +453,8 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 - search, stats, and changes feed
 - JSON and BibTeX export
 - audit log read endpoints
-- Semantic Scholar enrichment: `POST /doi-metadata`, `POST /lookup`, `POST /recommendations`, `POST /references`, `POST /citations` (JWT)
-- PDF upload to Google Drive: `POST /publications/:publicationId/pdf` (JWT)
+- Semantic Scholar: `POST /semantic-scholar/doi-metadata`, `/lookup`, `/search`, `/recommendations`, `/references`, `/citations` (API key)
+- PDF upload to Google Drive: `POST /vaults/:vaultId/items/:itemId/pdf` (API key)
 
 ### Deferred
 
@@ -473,3 +473,13 @@ The skill implementation is acceptable when:
 - outputs are structured enough for downstream agents
 - the implementation does not require direct Supabase access
 - the same operation names can be mirrored later by a CLI and MCP server
+
+
+## API-key Semantic Scholar and PDF workflows (2026-06)
+
+Normal agent runtime is API-key-only:
+
+- Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
+- Item PDF upload: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with raw `application/pdf` bytes; requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.

@@ -11,11 +11,7 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 - `POST   /api/v1/keys/:keyId/revoke`
 - `DELETE /api/v1/keys/:keyId`
 - `GET    /api/v1/audit`                                    all audit logs for key owner
-- `POST   /api/v1/recommendations`                         Semantic Scholar (JWT-only)
-- `POST   /api/v1/references`                              Semantic Scholar (JWT-only)
-- `POST   /api/v1/citations`                               Semantic Scholar (JWT-only)
-- `POST   /api/v1/lookup`                                  Semantic Scholar (JWT-only)
-- `POST   /api/v1/doi-metadata`                            Semantic Scholar DOI enrichment (JWT-only)
+- `POST   /api/v1/recommendations|references|citations|lookup|doi-metadata|search` legacy frontend Semantic Scholar routes (JWT-only; agents use `/semantic-scholar/*`)
 - `GET/POST/DELETE /api/v1/google-drive`                   Drive link management (JWT-only)
 - `POST   /api/v1/publications/:publicationId/pdf`         upload PDF to Drive (JWT-only)
 
@@ -114,12 +110,12 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 | Export vault | `GET /api/v1/vaults/:vaultId/export?format=` | `vaults:export` | viewer |
 | Read vault audit log | `GET /api/v1/vaults/:vaultId/audit` | any API key | viewer |
 | Read global audit log | `GET /api/v1/audit` | JWT (management) | — |
-| Enrich publication metadata from Semantic Scholar | `POST /api/v1/doi-metadata` then `PATCH /api/v1/vaults/:vaultId/items/:itemId` | JWT + `vaults:write` | editor |
-| Look up Semantic Scholar paper id | `POST /api/v1/lookup` | JWT (management) | — |
-| Get paper recommendations | `POST /api/v1/recommendations` | JWT (management) | — |
-| Get paper references | `POST /api/v1/references` | JWT (management) | — |
-| Get paper citations | `POST /api/v1/citations` | JWT (management) | — |
-| Upload PDF to Google Drive for a publication | `POST /api/v1/publications/:publicationId/pdf` | JWT (management) | — |
+| Enrich publication metadata from Semantic Scholar | `POST /api/v1/semantic-scholar/doi-metadata` then `PATCH /api/v1/vaults/:vaultId/items/:itemId` | `vaults:read` + `vaults:write` | editor |
+| Look up Semantic Scholar paper id | `POST /api/v1/semantic-scholar/lookup` | `vaults:read` | — |
+| Get paper recommendations | `POST /api/v1/semantic-scholar/recommendations` or `/related` | `vaults:read` | — |
+| Get paper references | `POST /api/v1/semantic-scholar/references` | `vaults:read` | — |
+| Get paper citations | `POST /api/v1/semantic-scholar/citations` or `/cited-by` | `vaults:read` | — |
+| Upload PDF to Google Drive for a vault item | `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` | `vaults:write` | editor |
 
 ## 3. Workflows not yet implemented
 
@@ -167,10 +163,10 @@ Current scopes:
 | `vaults.export` | `vaults:export` |
 | `audit.list` (vault-scoped) | any valid API key |
 | `audit.list` (global) | JWT (management) |
-| `enrichment.doiMetadata` | JWT (management) |
-| `enrichment.enrichVault` / `enrichment.enrichItem` | JWT + `vaults:write` (read via API key, patch via API key) |
-| `publications.uploadPdf` | JWT (management) |
-| `scholar.lookup` / `recommendations` / `references` / `citations` | JWT (management) |
+| `enrichment.doiMetadata` | `vaults:read` |
+| `enrichment.enrichVault` / `enrichment.enrichItem` | `vaults:read` + `vaults:write` |
+| `items.uploadPdf` | `vaults:write` |
+| `scholar.lookup` / `search` / `recommendations` / `references` / `citations` | `vaults:read` |
 
 ## 5. Important constraints inherited from the current API
 
@@ -188,9 +184,9 @@ Current scopes:
 - Relation creation is not idempotent — submitting a duplicate pair will produce an error; check before creating.
 - Relations list only supports `?type=` filter — `source_id` and `target_id` filters are not implemented.
 - DOI import calls Semantic Scholar internally; it will fail if `SEMANTIC_SCHOLAR_API_KEY` is not configured.
-- Semantic Scholar enrichment routes (`/doi-metadata`, `/lookup`, `/recommendations`, `/references`, `/citations`) require a session JWT — API keys are rejected with `401 refhub_api_key_not_supported`.
+- Agent Semantic Scholar routes live under `/semantic-scholar/*` and accept API keys with `vaults:read`; legacy root routes remain JWT-only for frontend compatibility.
 - Semantic Scholar rate limit: 1 request per second. The enrichment workflow must sleep between calls when processing multiple items.
-- PDF upload (`POST /publications/:publicationId/pdf`) requires a session JWT and Google Drive linked to the account. `publicationId` is `original_publication_id` from the vault item, not the item's `id`. Max file size: 26 MB. Returns `503 drive_not_linked` if Drive has not been connected.
+- Item PDF upload (`POST /vaults/:vaultId/items/:itemId/pdf`) requires `vaults:write` and Google Drive linked to the account through the web UI. Max file size: 26 MB. Returns `503 drive_not_linked` if Drive has not been connected.
 - Google Drive link management (`GET/POST/DELETE /google-drive`) is a separate JWT management workflow outside the normal agent-facing skill surface.
 
 ## 6. Practical implication for skill design
@@ -200,3 +196,13 @@ The skill covers the full current public API surface. Future expansion should fo
 `API route exists → update skill → update CLI/MCP`
 
 Deferred features (archiving, webhooks, revision history) should not be approximated via existing endpoints.
+
+
+## API-key Semantic Scholar and PDF workflows (2026-06)
+
+Normal agent runtime is API-key-only:
+
+- Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
+- Item PDF upload: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with raw `application/pdf` bytes; requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
