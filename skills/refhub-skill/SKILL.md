@@ -15,7 +15,7 @@ If the `refhub` CLI is available in the environment (`which refhub` succeeds), u
 
 **Exit codes:** `0` success · `1` API error · `2` bad arguments · `3` auth error (missing/invalid key)
 
-**JWT workflows:** Use `refhub enrich` and `refhub pdf upload` for Semantic Scholar enrichment and PDF upload — both accept `--jwt <token>` or read `REFHUB_JWT` from the environment. Other management routes (Google Drive, key management) have no CLI command; make direct HTTP calls for those as documented in the workflow sections below.
+**API-key agent workflows:** Use `refhub discover`, `refhub enrich`, and `refhub pdf upload` with the RefHub API key. Session JWT is only for account setup/admin routes such as key lifecycle, Google Drive link management, and global audit.
 
 # RefHub Skill
 
@@ -77,11 +77,11 @@ Keys may also be **vault-restricted** — they can only operate on the vault IDs
 Authorization: Bearer <supabase-session-jwt>
 ```
 
-Required for: key management (`/keys`), Semantic Scholar routes (`recommendations`, `references`, `citations`, `lookup`, `doi-metadata`), Google Drive routes, PDF upload (`POST /publications/:publicationId/pdf`), and global audit (`GET /audit`).
+Required for: key management (`/keys`), Google Drive link-management routes, legacy publication-level PDF upload (`POST /vaults/:vaultId/items/:itemId/pdf`), and global audit (`GET /audit`). API-key agents should use `/semantic-scholar/*` and `/vaults/:vaultId/items/:itemId/pdf`.
 
-Session JWTs come from the user's active Supabase session. If one is not available in the environment, ask the user to provide it or to perform the action through the RefHub web app.
+Session JWTs come from the user's active Supabase session. Prefer API-key routes for normal agent work; ask the user to use the web app for setup/admin flows.
 
-**If an API key (`rhk_...`) is sent to a management route, the API returns `401 refhub_api_key_not_supported`.** This is expected. Switch to JWT for that call.
+**If an API key (`rhk_...`) is sent to a management route, the API returns `401 refhub_api_key_not_supported`.** This is expected. Do not retry with the same key.
 
 ### When credentials are missing or insufficient
 
@@ -196,9 +196,9 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 
 ### Metadata enrichment via Semantic Scholar
 
-These routes require a **session JWT**. Use them to fill in missing or incomplete fields on existing publications, or to look up a paper before adding it.
+These routes are available to API-key agents under `/semantic-scholar/*` and require `vaults:read`. Use them to fill in missing fields or discover papers before adding them.
 
-**Enrich a publication with a DOI** — session JWT
+**Enrich a publication with a DOI** — API key
 1. Identify items in a vault that have a DOI but are missing fields (abstract, authors, year, venue)
 2. `POST /doi-metadata` with `{ doi: "10.xxxx/xxxxx" }`
 3. Response `data` contains `{ title, authors, year, journal, doi, url, abstract, type }` — `null` if the DOI is not found in Semantic Scholar
@@ -207,46 +207,28 @@ These routes require a **session JWT**. Use them to fill in missing or incomplet
 
 **Bulk enrichment workflow**
 1. `GET /vaults/:vaultId` (API key) — collect all items with a DOI and missing fields
-2. For each DOI, `POST /doi-metadata` (JWT) — respect the per-user rate limit (1 req/s); back off on `429`
+2. For each DOI, `POST /semantic-scholar/doi-metadata` (API key) — respect the per-user rate limit (1 req/s); back off on `429`
 3. Patch only the fields that were blank — do not overwrite values the user has already set
 4. Report a summary: how many items enriched, how many DOIs not found
 
-**Paper lookup by DOI or title** — session JWT
-1. `POST /lookup` with `{ doi }` or `{ title }` — returns a Semantic Scholar `paper_id`
+**Paper lookup by DOI or title** — API key
+1. `POST /semantic-scholar/lookup` with `{ doi }` or `{ title }` — returns a Semantic Scholar `paper_id`
 2. Use the `paper_id` with `POST /recommendations`, `/references`, or `/citations` to discover related work
-3. `POST /recommendations` / `/references` / `/citations` with `{ paper_id, limit? }` (1–25) — returns normalized paper records
+3. `POST /semantic-scholar/recommendations` / `/semantic-scholar/references` / `/semantic-scholar/citations` with `{ paper_id, limit? }` (1–25) — returns normalized paper records
 
 ---
 
-### PDF upload to Google Drive
+### PDF upload
 
-Requires a **session JWT** and Google Drive linked for the account. Stores the PDF in the user's Drive and creates an asset record linked to the publication.
+Requires `vaults:write` and Google Drive already linked through the RefHub web UI. Google Drive connect/disconnect remains a session-JWT/browser setup flow.
 
-**Upload a PDF for a publication** — session JWT
-1. Confirm the user's Google Drive is linked (if uncertain, the upload will fail with `503 drive_not_linked`)
-2. Get the `original_publication_id` from the vault item — this is the `publicationId` for the upload route (distinct from the vault item's `id`)
-3. `POST /publications/:publicationId/pdf` with the raw PDF bytes as the request body
-   - `Content-Type: application/pdf`
-   - Body: raw PDF bytes (not base64, not multipart)
-   - Max size: 26 MB by default (`GOOGLE_DRIVE_MAX_UPLOAD_BYTES` server config)
-4. Response on success:
-   ```json
-   {
-     "data": {
-       "stored": true,
-       "provider": "google_drive",
-       "fileId": "...",
-       "pdfUrl": "https://drive.google.com/file/d/.../view",
-       "folderId": "...",
-       "folderName": "refhub"
-     }
-   }
-   ```
-5. The asset record is automatically linked to the publication — no further step needed
+```text
+POST   /vaults/:vaultId/items/:itemId/pdf          # raw application/pdf bytes or JSON source_url → stored in Drive
+POST   /vaults/:vaultId/items/:itemId/pdf/session  # create resumable Drive session
+POST   /vaults/:vaultId/items/:itemId/pdf/complete # complete resumable upload
+```
 
-Errors: `404 publication_not_found` (wrong id or not owned by the user) · `503 drive_not_linked` · `502 drive_upload_failed` · `413` if the file exceeds the server limit.
-
----
+CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 
 ### Tags
 
@@ -279,8 +261,8 @@ Supported relation types: `cites`, `extends`, `builds_on`, `contradicts`, `revie
 
 All require `vaults:read` + viewer.
 
-**Search items:** `GET /vaults/:vaultId/search?q=&author=&year=&doi=&tag_id=&type=&page=&limit=`
-- `limit` default 20, max 100
+**Search items:** `GET /vaults/:vaultId/search?q=&author=&year=&doi=&tag=&type=&page=&per_page=`
+- `per_page` default 25, max 100
 - `q` is case-insensitive substring match across title, abstract, authors
 
 **Stats:** `GET /vaults/:vaultId/stats`
@@ -306,9 +288,9 @@ Returns attachment-style serialized content. Preserve the raw payload; do not re
 
 Requires any valid API key (data route for vault-scoped; JWT for global).
 
-- Vault-scoped: `GET /vaults/:vaultId/audit?since=&until=&limit=&page=`
-- Global (JWT only): `GET /audit?since=&until=&limit=&page=`
-- `limit` default 50, max 200
+- Vault-scoped: `GET /vaults/:vaultId/audit?since=&until=&per_page=&page=`
+- Global (JWT only): `GET /audit?since=&until=&per_page=&page=`
+- `per_page` default 25, max 100
 
 ---
 
@@ -334,7 +316,7 @@ Every error response includes `error.code`, `error.message`, and `meta.request_i
 ## Guardrails
 
 - **Never infer `vault_id` from a vault name.** Always call `GET /vaults` and resolve it from the response.
-- **Use the right auth for the right route.** Management routes (Semantic Scholar, PDF upload, key management, Google Drive) require a session JWT and will reject API keys with `401 refhub_api_key_not_supported`. Data routes require an API key.
+- **Use the right auth for the right route.** Management routes (key management, Google Drive link management, global audit) require a session JWT and will reject API keys with `401 refhub_api_key_not_supported`. Data routes require an API key.
 - **Never assume a tag exists.** List tags before using `tag_ids` in any write.
 - **Never create tags implicitly during item writes.** Tag creation is a separate step.
 - **Never retry a bulk write after ambiguous failure** unless you have an `idempotency_key`.
@@ -364,3 +346,13 @@ If a user requests one of these, state clearly that the feature is not yet avail
 
 - `docs/api-mapping.md` — full endpoint table with scopes, permissions, and constraints
 - `docs/spec.md` — detailed per-workflow behavioral contracts and edge cases
+
+
+## API-key Semantic Scholar and PDF workflows (2026-06)
+
+Normal agent runtime is API-key-only:
+
+- Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
+- Item PDF upload: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with raw `application/pdf` bytes; requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
