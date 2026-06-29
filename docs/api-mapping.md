@@ -74,7 +74,7 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 - `POST   /api/v1/vaults/:vaultId/items/:itemId/pdf/session`
 - `POST   /api/v1/vaults/:vaultId/items/:itemId/pdf/complete`
 
-The CLI currently uses the raw API-key upload route only. The `/session` and `/complete` API-key routes exist server-side, but browser-direct resumable uploads are primarily a web UI/session flow under `/google-drive/...` because Drive CORS depends on forwarding a validated browser `Origin` during resumable session creation.
+The CLI uses the raw API-key upload route for small PDFs and the API-key `/session` + `/complete` routes for larger vault-item PDFs. The returned `upload_url` is a Google Drive resumable URL; clients upload bytes directly to Drive before completing the item asset through the API-key route. Browser/session resumable uploads stay under `/google-drive/...`.
 
 ## 2. Skill workflow to API mapping
 
@@ -119,7 +119,7 @@ The CLI currently uses the raw API-key upload route only. The `/session` and `/c
 | Get paper recommendations | `POST /api/v1/semantic-scholar/recommendations` or `/related` | `vaults:read` | — |
 | Get paper references | `POST /api/v1/semantic-scholar/references` | `vaults:read` | — |
 | Get paper citations | `POST /api/v1/semantic-scholar/citations` or `/cited-by` | `vaults:read` | — |
-| Upload PDF to Google Drive for a vault item | `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` | `vaults:write` | editor |
+| Upload PDF to Google Drive for a vault item | `POST /api/v1/vaults/:vaultId/items/:itemId/pdf`, `/pdf/session`, `/pdf/complete` | `vaults:write` | editor |
 
 ## 3. Workflows not yet implemented
 
@@ -190,9 +190,9 @@ Current scopes:
 - DOI import calls Semantic Scholar internally; it will fail if `SEMANTIC_SCHOLAR_API_KEY` is not configured.
 - Agent Semantic Scholar routes live under `/semantic-scholar/*` and accept API keys with `vaults:read`; legacy root routes remain JWT-only for frontend compatibility.
 - Semantic Scholar rate limit: 1 request per second. The enrichment workflow must sleep between calls when processing multiple items.
-- Item PDF upload (`POST /vaults/:vaultId/items/:itemId/pdf`) requires `vaults:write` and Google Drive linked to the account through the web UI. Raw API uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB). Oversized requests return `413 pdf_upload_too_large_for_api`; use the browser/session resumable Drive upload flow for larger PDFs. Returns `503 drive_not_linked` if Drive has not been connected.
+- Item PDF upload requires `vaults:write` and Google Drive linked to the account through the web UI. Small PDFs use raw `POST /vaults/:vaultId/items/:itemId/pdf`; raw API uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB). Larger vault-item PDFs use API-key `POST /pdf/session`, direct Drive `PUT` to the returned `upload_url`, then `POST /pdf/complete`. Returns `503 drive_not_linked` if Drive has not been connected.
 - Google Drive link management (`GET/POST/DELETE /google-drive`) is a separate JWT management workflow outside the normal agent-facing skill surface.
-- Browser/session JWT item PDF routes are under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`; API-key agents must not call those routes.
+- Browser/session JWT item PDF routes are under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`; API-key agents must not call those `/google-drive/...` routes.
 - Google Drive resumable session creation forwards only validated browser `Origin` values. Defaults include `https://refhub.io`, `http://localhost:3000`, `http://localhost:5173`, and `http://localhost:8081`; explicit `REFHUB_API_ALLOWED_ORIGINS` overrides must include the active frontend/dev origin.
 
 ## 6. Practical implication for skill design
@@ -209,9 +209,10 @@ Deferred features (archiving, webhooks, revision history) should not be approxim
 Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
-- Item PDF upload: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with raw `application/pdf` bytes; requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
-- Raw API PDF uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB). Oversized requests return structured `413 pdf_upload_too_large_for_api`; use the browser/session resumable Google Drive flow for larger PDFs.
-- Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`. API-key agents must not call those routes.
+- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Small PDFs use raw `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with `application/pdf` bytes. Raw API uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB).
+- Larger vault-item PDFs use the API-key resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete`.
+- Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`. API-key agents must not call those `/google-drive/...` routes.
 - Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
 - `publication_pdf_assets` canonical-row delete/insert behavior is an internal frontend/schema detail; do not depend on PostgREST upsert semantics for that table from agents.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
