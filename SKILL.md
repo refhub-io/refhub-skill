@@ -75,7 +75,7 @@ Keys may also be **vault-restricted** — they can only operate on the vault IDs
 Authorization: Bearer <supabase-session-jwt>
 ```
 
-Use only for: `GET/POST/DELETE /api/v1/keys`, legacy frontend Semantic Scholar root routes, Google Drive link-management routes, `GET /api/v1/audit`.
+Use only for: `GET/POST/DELETE /api/v1/keys`, legacy frontend Semantic Scholar root routes, Google Drive link-management routes, legacy publication-level PDF upload (`POST /api/v1/publications/:publicationId/pdf`), and `GET /api/v1/audit`.
 
 **If an API key (`rhk_...`) is sent to a management route, the API returns `401 refhub_api_key_not_supported`.** This is expected. Do not retry with the same key.
 
@@ -263,7 +263,7 @@ Requires any valid API key (data route for vault-scoped; JWT for global).
 | `403` | `vault_access_denied`, `vault_not_found` | No access to this vault with this key. Report and stop. |
 | `404` | `item_not_found`, `tag_not_found`, `relation_not_found` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | (DOI import, duplicate relation) | Resource already exists. Surface the existing item id to the user. |
-| `413` | `request_too_large` | Payload too large. Split the request into smaller batches. |
+| `413` | `request_too_large`, `pdf_upload_too_large_for_api` | Payload too large. Split batch requests; for PDFs, use the API-key item resumable upload flow (`/pdf/session` → direct Drive `PUT` → `/pdf/complete`) rather than retrying the raw API upload. |
 | `429` | `rate_limit_exceeded` | Back off. Use `retry_after_seconds` from the response. |
 | `500` | `bulk_insert_partial_failure`, `bulk_insert_failed` | Partial write may have occurred. Do not retry without `idempotency_key`. Alert user for manual review if partial failure. |
 | `5xx` | `internal_error`, `service_error` | Transient. Retry once with backoff. If it persists, report and stop. |
@@ -314,6 +314,11 @@ If a user requests one of these, state clearly that the current public API does 
 Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
-- Item PDF upload: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with raw `application/pdf` bytes; requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Small PDFs use raw `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with `application/pdf` bytes. Raw API uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB).
+- Larger vault-item PDFs use the API-key resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete`.
+- Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`. API-key agents must not call those `/google-drive/...` routes; they are for the web UI and Supabase session auth.
+- Google Drive resumable session creation forwards only validated browser `Origin` values. Defaults include `https://refhub.io`, `http://localhost:3000`, `http://localhost:5173`, and `http://localhost:8081`; explicit `REFHUB_API_ALLOWED_ORIGINS` deployments must include the active frontend/dev origin or Drive will omit matching browser CORS headers on the direct PUT.
 - Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- `publication_pdf_assets` canonical-row delete/insert behavior is an internal frontend/schema detail; do not depend on PostgREST upsert semantics for that table from agents.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.

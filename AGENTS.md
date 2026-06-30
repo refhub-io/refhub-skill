@@ -39,7 +39,7 @@ Two modes — never mix them.
 Authorization: Bearer rhk_<publicId>_<secret>
 ```
 
-**Session JWT** (management routes — key lifecycle, Google Drive, Semantic Scholar enrichment, PDF upload):
+**Session JWT** (management routes — key lifecycle, Google Drive connect/disconnect, legacy publication-level PDF upload, global audit):
 ```
 Authorization: Bearer <supabase-session-jwt>
 ```
@@ -181,13 +181,15 @@ CLI: `refhub discover ...` for lookup/search/graph traversal, and `refhub enrich
 Requires `vaults:write` and Google Drive already linked to the account through the web UI.
 
 ```
-POST   /vaults/:vaultId/items/:itemId/pdf    # raw application/pdf bytes → stored in Drive
+POST   /vaults/:vaultId/items/:itemId/pdf          # small raw application/pdf bytes → stored in Drive
+POST   /vaults/:vaultId/items/:itemId/pdf/session  # create large-PDF resumable Drive session
+POST   /vaults/:vaultId/items/:itemId/pdf/complete # complete large-PDF resumable upload
 ```
 
-- `publicationId` is `original_publication_id` from the vault item, not the item's `id`
-- Max 26 MB
+- Raw API uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB).
+- Larger vault-item PDFs use the API-key resumable flow: create `/pdf/session`, direct `PUT` bytes to the returned Google Drive `upload_url`, then call `/pdf/complete`.
 - CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`
-- Errors: `404 publication_not_found` · `503 drive_not_linked` · `502 drive_upload_failed`
+- Errors: `404 publication_not_found` · `413 pdf_upload_too_large_for_api` · `503 drive_not_linked` · `502 drive_upload_failed`
 
 ### Export and audit
 
@@ -209,7 +211,7 @@ GET    /audit?since=&until=&per_page=&page=            # global (JWT only)
 | `403 vault_access_denied` / `vault_not_found` | Report and stop. |
 | `404` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | Already exists (DOI import, duplicate relation). Surface the existing resource id. |
-| `413 request_too_large` | Split into smaller batches. |
+| `413 request_too_large`, `pdf_upload_too_large_for_api` | Split batch requests; for PDFs, use API-key `/pdf/session`, direct Drive `PUT`, then `/pdf/complete` instead of retrying the raw upload. |
 | `429 rate_limit_exceeded` | Back off using `retry_after_seconds`. |
 | `500 bulk_insert_partial_failure` | Partial write may have occurred. Do not retry without `idempotency_key`. Alert user for manual review. |
 | `5xx` | Retry once with backoff. If it persists, report and stop. |
@@ -234,6 +236,6 @@ State this clearly if the user requests one; do not improvise an alternative.
 Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
-- Item PDF upload: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with raw `application/pdf` bytes; requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Small PDFs use raw `POST /api/v1/vaults/:vaultId/items/:itemId/pdf`; larger vault-item PDFs use API-key `POST /pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /pdf/complete`. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 - Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.

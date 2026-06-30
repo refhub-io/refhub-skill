@@ -77,7 +77,7 @@ Keys may also be **vault-restricted** — they can only operate on the vault IDs
 Authorization: Bearer <supabase-session-jwt>
 ```
 
-Required for: key management (`/keys`), Google Drive link-management routes, legacy publication-level PDF upload (`POST /vaults/:vaultId/items/:itemId/pdf`), and global audit (`GET /audit`). API-key agents should use `/semantic-scholar/*` and `/vaults/:vaultId/items/:itemId/pdf`.
+Required for: key management (`/keys`), Google Drive link-management routes, legacy publication-level PDF upload (`POST /publications/:publicationId/pdf`), and global audit (`GET /audit`). API-key agents should use `/semantic-scholar/*` and `/vaults/:vaultId/items/:itemId/pdf*`.
 
 Session JWTs come from the user's active Supabase session. Prefer API-key routes for normal agent work; ask the user to use the web app for setup/admin flows.
 
@@ -230,6 +230,8 @@ POST   /vaults/:vaultId/items/:itemId/pdf/complete # complete resumable upload
 
 CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 
+Small PDFs stay on the raw route. Larger vault-item PDFs use `POST /pdf/session`, direct `PUT` of bytes to the returned Google Drive `upload_url`, then `POST /pdf/complete`. Browser/session JWT routes remain under `/api/v1/google-drive/...`; Google Drive account setup/connect/disconnect remains a web UI/session-JWT flow.
+
 ### Tags
 
 All tag writes require `vaults:write` + editor. Reads require `vaults:read`.
@@ -304,7 +306,7 @@ Requires any valid API key (data route for vault-scoped; JWT for global).
 | `403` | `vault_access_denied`, `vault_not_found` | No access to this vault with this key. Report and stop. |
 | `404` | `item_not_found`, `tag_not_found`, `relation_not_found` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | (DOI import, duplicate relation) | Resource already exists. Surface the existing item id to the user. |
-| `413` | `request_too_large` | Payload too large. Split the request into smaller batches. |
+| `413` | `request_too_large`, `pdf_upload_too_large_for_api` | Payload too large. Split batch requests; for PDFs, use the API-key item resumable upload flow (`/pdf/session` -> direct Drive `PUT` -> `/pdf/complete`) rather than retrying the raw API upload. |
 | `429` | `rate_limit_exceeded` | Back off. Use `retry_after_seconds` from the response. |
 | `500` | `bulk_insert_partial_failure`, `bulk_insert_failed` | Partial write may have occurred. Do not retry without `idempotency_key`. Alert user for manual review if partial failure. |
 | `5xx` | `internal_error`, `service_error` | Transient. Retry once with backoff. If it persists, report and stop. |
@@ -353,6 +355,6 @@ If a user requests one of these, state clearly that the feature is not yet avail
 Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
-- Item PDF upload: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with raw `application/pdf` bytes; requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Small PDFs use raw `POST /api/v1/vaults/:vaultId/items/:itemId/pdf`; larger vault-item PDFs use API-key `POST /pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /pdf/complete`. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 - Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
