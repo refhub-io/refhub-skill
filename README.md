@@ -79,13 +79,13 @@ the cli covers all data routes plus `enrich` and `pdf upload`. for other managem
 
 ```sh
 claude plugin marketplace add \
-  https://raw.githubusercontent.com/refhub-io/refhub-claude/main/.claude-plugin/marketplace.json
+  https://github.com/refhub-io/refhub-claude
 claude plugin install refhub-skill@refhub-claude
 ```
 
 available in the next session. automatically invoked when you ask claude to work with refhub vaults or papers.
 
-Why this form: `claude plugin marketplace add refhub-io/refhub-claude` uses GitHub shorthand and Claude clones it over SSH (`git@github.com:...`), which fails on machines without a GitHub SSH key. The raw manifest URL avoids that.
+Why this form: `claude plugin marketplace add refhub-io/refhub-claude` uses GitHub shorthand and Claude clones it over SSH (`git@github.com:...`), which fails on machines without a GitHub SSH key. The HTTPS repo URL avoids that while keeping the normal Claude marketplace flow.
 
 ### gemini cli
 
