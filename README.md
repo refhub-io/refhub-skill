@@ -43,6 +43,8 @@ two modes — use the right one for the right route:
 REFHUB_API_KEY=rhk_<publicId>_<secret>
 ```
 
+Keep this in your shell environment or a local env file. Do not paste live keys into Claude, Codex, or plugin chats.
+
 **session jwt** — setup/admin routes only (google drive link management, key management, global audit). These are normally handled through the RefHub UI; do not require a session JWT for ordinary CLI agent workflows.
 
 ---
@@ -76,11 +78,14 @@ the cli covers all data routes plus `enrich` and `pdf upload`. for other managem
 ### claude code
 
 ```sh
-claude plugin marketplace add refhub-io/refhub-marketplace
-claude plugin install refhub-skill@refhub-marketplace
+claude plugin marketplace add \
+  https://github.com/refhub-io/refhub-claude
+claude plugin install refhub-skill@refhub-claude
 ```
 
 available in the next session. automatically invoked when you ask claude to work with refhub vaults or papers.
+
+Why this form: `claude plugin marketplace add refhub-io/refhub-claude` uses GitHub shorthand and Claude clones it over SSH (`git@github.com:...`), which fails on machines without a GitHub SSH key. The HTTPS repo URL avoids that while keeping the normal Claude marketplace flow.
 
 ### gemini cli
 
@@ -117,6 +122,41 @@ curl -O https://raw.githubusercontent.com/refhub-io/refhub-skill/main/AGENTS.md
 ```
 
 or add it globally via your agent's rules/settings ui.
+
+## // keep the api key out of chat
+
+Recommended pattern: store the key in a local env file and launch agents through a small wrapper instead of pasting the key into prompts.
+
+Create the env file once:
+
+```sh
+mkdir -p ~/.config/refhub
+cat > ~/.config/refhub/env <<'EOF'
+export REFHUB_API_KEY='rhk_REPLACE_ME'
+EOF
+chmod 600 ~/.config/refhub/env
+```
+
+Optional wrappers:
+
+```sh
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/claude-refhub <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$HOME/.config/refhub/env"
+exec claude "$@"
+EOF
+cat > ~/.local/bin/codex-refhub <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$HOME/.config/refhub/env"
+exec codex "$@"
+EOF
+chmod +x ~/.local/bin/claude-refhub ~/.local/bin/codex-refhub
+```
+
+Then start the agent with `claude-refhub` or `codex-refhub`. The plugin/skill reads `REFHUB_API_KEY` from the environment, and the key never needs to appear in chat history.
 
 ---
 
