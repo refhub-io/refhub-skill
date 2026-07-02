@@ -25,8 +25,11 @@ with a scoped refhub api key for normal runtime work, an agent can:
 ## // structure
 
 ```
-SKILL.md          ← skill entry point
-AGENTS.md         ← instructions for cursor, windsurf, codex, and others
+skills/refhub-skill/SKILL.md  ← skill entry point
+AGENTS.md                      ← instructions for cursor, windsurf, pi, and other generic harnesses
+.claude-plugin/                ← Claude Code plugin + self-hosted marketplace manifest
+.codex-plugin/                 ← Codex plugin manifest
+.agents/plugins/marketplace.json ← self-hosted Codex marketplace manifest
 docs/
   api-mapping.md  ← endpoint/scope/constraint reference
   spec.md         ← per-workflow behavioral contracts
@@ -78,21 +81,46 @@ the cli covers all data routes plus `enrich` and `pdf upload`. for other managem
 ### claude code
 
 ```sh
-claude plugin marketplace add \
-  https://github.com/refhub-io/refhub-claude
-claude plugin install refhub-skill@refhub-claude
+claude plugin marketplace add https://github.com/refhub-io/refhub-skill
+claude plugin install refhub-skill@refhub-skill
 ```
 
 available in the next session. automatically invoked when you ask claude to work with refhub vaults or papers.
 
-Why this form: `claude plugin marketplace add refhub-io/refhub-claude` uses GitHub shorthand and Claude clones it over SSH (`git@github.com:...`), which fails on machines without a GitHub SSH key. The HTTPS repo URL avoids that while keeping the normal Claude marketplace flow.
+Why the explicit HTTPS URL: `claude plugin marketplace add refhub-io/refhub-skill` uses GitHub shorthand and Claude clones it over SSH (`git@github.com:...`), which fails on machines without a GitHub SSH key. The HTTPS repo URL avoids that while keeping the normal Claude marketplace flow.
+
+### codex
+
+**from github** — add to your Codex plugin marketplace configuration (`~/.agents/plugins/marketplace.json` or project `.agents/plugins/marketplace.json`):
+
+```json
+{
+  "name": "refhub-skill",
+  "source": { "source": "github", "repo": "refhub-io/refhub-skill" },
+  "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+  "category": "Productivity"
+}
+```
+
+this repo already ships its own `.agents/plugins/marketplace.json`, so cloning it locally and pointing Codex at the clone works too:
+
+```json
+{
+  "name": "refhub-skill",
+  "source": { "source": "local", "path": "~/plugins/refhub-skill" },
+  "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+  "category": "Productivity"
+}
+```
+
+manifest: `.codex-plugin/plugin.json`
 
 ### gemini cli
 
 ```sh
 mkdir -p ~/.gemini/skills/refhub-skill
 curl -o ~/.gemini/skills/refhub-skill/SKILL.md \
-  https://raw.githubusercontent.com/refhub-io/refhub-skill/main/SKILL.md
+  https://raw.githubusercontent.com/refhub-io/refhub-skill/main/skills/refhub-skill/SKILL.md
 ```
 
 ### opencode
@@ -100,20 +128,12 @@ curl -o ~/.gemini/skills/refhub-skill/SKILL.md \
 ```sh
 mkdir -p ~/.config/opencode/skills/refhub-skill
 curl -o ~/.config/opencode/skills/refhub-skill/SKILL.md \
-  https://raw.githubusercontent.com/refhub-io/refhub-skill/main/SKILL.md
+  https://raw.githubusercontent.com/refhub-io/refhub-skill/main/skills/refhub-skill/SKILL.md
 ```
 
 restart opencode to load the skill.
 
-### codex cli
-
-```sh
-mkdir -p ~/.codex/skills/refhub-skill
-curl -o ~/.codex/skills/refhub-skill/SKILL.md \
-  https://raw.githubusercontent.com/refhub-io/refhub-skill/main/SKILL.md
-```
-
-### cursor, windsurf, and others
+### cursor, windsurf, pi, and other generic harnesses
 
 copy `AGENTS.md` to your project root:
 
