@@ -143,17 +143,19 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 
 **Add items** — `vaults:write` + editor
 1. Confirm vault access and that `tag_ids` (if any) already exist in the vault
-2. `POST /vaults/:vaultId/items` with `{ items: [{ title, authors?, year?, doi?, tag_ids?, ... }] }`
+2. `POST /vaults/:vaultId/items` with `{ items: [{ title, authors?, year?, doi?, tag_ids?, notes?, ... }] }`
 3. Each item must include `title`; `tag_ids` must reference existing vault tags
 4. `authors` is a **string array** (e.g. `["Smith J", "Doe A"]`), not a plain string. The CLI `--authors` flag accepts comma-separated input and converts automatically.
-5. On partial failure the backend attempts rollback; treat `bulk_insert_partial_failure` as a high-severity error requiring manual review
-6. CLI: `refhub items add --vault <id> --title <t> [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--tags <id,id>]`
+5. `notes` is a free-text field on the item (agent-facing annotations, not a separate resource) — pass it straight through as a string
+6. On partial failure the backend attempts rollback; treat `bulk_insert_partial_failure` as a high-severity error requiring manual review
+7. CLI: `refhub items add --vault <id> --title <t> [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--tags <id,id>] [--notes <text>]`
 
 **Update item** — `vaults:write` + editor
-1. `PATCH /vaults/:vaultId/items/:itemId` with any publication fields
+1. `PATCH /vaults/:vaultId/items/:itemId` with any publication fields, including `notes`
 2. If `tag_ids` is included, it **replaces the full tag set** — not additive
 3. `version` increments automatically on metadata updates
-4. CLI: when using `refhub items update --tags`, a warning is emitted to stderr confirming the full-replacement behaviour before the request is sent
+4. CLI: `refhub items update <itemId> --vault <id> [--title <t>] [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--tags <id,id>] [--notes <text>]`
+5. CLI: when using `refhub items update --tags`, a warning is emitted to stderr confirming the full-replacement behaviour before the request is sent
 
 **Delete item** — `vaults:write` + editor
 1. **Warn the user — hard delete, no undo**
