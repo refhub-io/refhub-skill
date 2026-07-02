@@ -1,0 +1,20 @@
+{
+  "name": "refhub-skill",
+  "interface": {
+    "displayName": "RefHub Skill"
+  },
+  "plugins": [
+    {
+      "name": "refhub-skill",
+      "source": {
+        "source": "github",
+        "repo": "refhub-io/refhub-skill"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

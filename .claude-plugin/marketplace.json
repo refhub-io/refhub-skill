@@ -1,0 +1,18 @@
+{
+  "name": "refhub-skill",
+  "owner": {
+    "name": "refhub-io"
+  },
+  "metadata": {
+    "description": "Agent skill for operating RefHub through its public API v2",
+    "version": "1.0.2"
+  },
+  "plugins": [
+    {
+      "name": "refhub-skill",
+      "description": "Agent skill for operating RefHub through its public API v2 - manage vaults, items, tags, relations, imports, search, export, and audit logs",
+      "source": "./",
+      "version": "1.0.2"
+    }
+  ]
+}
