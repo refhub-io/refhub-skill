@@ -197,6 +197,17 @@ Normal agent runtime is API-key-only:
 - Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 - Small PDFs use raw `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with `application/pdf` bytes. Raw API uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB).
 - Larger vault-item PDFs use the API-key resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete`.
+- The resulting Google Drive URL is returned as `data.driveUrl` (with `data.fileId`) in the upload/complete response — **and only there.** No GET route returns it afterward; see the field-parity note below. `driveUrl` is deliberately distinct from `pdf_url` (the publisher-hosted PDF link) — they are unrelated fields that happened to share a near-identical name before this rename.
 - Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`. API-key agents must not call those `/google-drive/...` routes.
 - Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
+
+## Publication field parity with the frontend (2026-07)
+
+Verified against the live API that `POST/PATCH /vaults/:vaultId/items[/:itemId]` already accept the full field set from the frontend's publication dialog (`url`, `pdf_url`/`publisher_pdf`, `notes`, plus the bibtex-oriented fields) — CLI `items add`/`items update` now expose `--url` and `--pdf-url` alongside the existing `--notes`.
+
+The one confirmed gap: the frontend's `drive_pdf` field (the Google Drive-hosted copy, from `publication_pdf_assets.stored_pdf_url`) is **not** returned by any GET route. `refhub pdf upload` performs a real Drive upload and returns the resulting URL in its response (`data.driveUrl`) — that is the only time the API surfaces it. There is no route to read it back afterward. See `docs/spec.md` §7.25 and `docs/api-mapping.md` for details.
+
+**Naming:** `data.driveUrl` (upload response) and `pdf_url` (publisher-hosted PDF, on the publication object) are unrelated fields — pending a backend rename from the previous `data.pdfUrl` to avoid the two being confused.
+
+**Reading PDFs:** `pdf_url` is a plain external link — fetch it like any web resource. The Drive-hosted copy has no read-back route at all, and even its view link (`https://drive.google.com/file/d/<fileId>/view`) isn't a raw download — actual byte content requires Google's Drive API with an OAuth token this skill doesn't have. See `docs/spec.md` §7.27 and `SKILL.md`'s "Reading a publication's PDF(s)" section.

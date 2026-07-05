@@ -143,19 +143,20 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 
 **Add items** — `vaults:write` + editor
 1. Confirm vault access and that `tag_ids` (if any) already exist in the vault
-2. `POST /vaults/:vaultId/items` with `{ items: [{ title, authors?, year?, doi?, tag_ids?, notes?, ... }] }`
+2. `POST /vaults/:vaultId/items` with `{ items: [{ title, authors?, year?, doi?, url?, pdf_url?, notes?, tag_ids?, ... }] }`. The full bibtex-oriented field set is accepted (`journal`, `volume`, `issue`, `pages`, `abstract`, `publication_type`, `booktitle`, `chapter`, `edition`, `editor`, `howpublished`, `institution`, `number`, `organization`, `publisher`, `school`, `series`, `type`, `eid`, `isbn`, `issn`, `keywords`), matching the frontend's publication dialog fields one-for-one.
 3. Each item must include `title`; `tag_ids` must reference existing vault tags
 4. `authors` is a **string array** (e.g. `["Smith J", "Doe A"]`), not a plain string. The CLI `--authors` flag accepts comma-separated input and converts automatically.
-5. `notes` is a free-text field on the item (agent-facing annotations, not a separate resource) — pass it straight through as a string
-6. On partial failure the backend attempts rollback; treat `bulk_insert_partial_failure` as a high-severity error requiring manual review
-7. CLI: `refhub items add --vault <id> --title <t> [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--tags <id,id>] [--notes <text>]`
+5. `url` is the publication's own link; `pdf_url` is the frontend's `publisher_pdf` field (a link to a publisher-hosted PDF) — distinct from the Google Drive-hosted copy, see PDF upload below.
+6. `notes` is a free-text field on the item (agent-facing annotations, not a separate resource) — pass it straight through as a string
+7. On partial failure the backend attempts rollback; treat `bulk_insert_partial_failure` as a high-severity error requiring manual review
+8. CLI: `refhub items add --vault <id> --title <t> [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--url <url>] [--pdf-url <url>] [--tags <id,id>] [--notes <text>]`
 
 **Update item** — `vaults:write` + editor
-1. `PATCH /vaults/:vaultId/items/:itemId` with any publication fields, including `notes`
+1. `PATCH /vaults/:vaultId/items/:itemId` with any publication fields (same set as add, above), including `notes`
 2. If `tag_ids` is included, it **replaces the full tag set** — not additive
 3. `version` increments automatically on metadata updates
-4. CLI: `refhub items update <itemId> --vault <id> [--title <t>] [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--tags <id,id>] [--notes <text>]`
-5. CLI: when using `refhub items update --tags`, a warning is emitted to stderr confirming the full-replacement behaviour before the request is sent
+4. CLI: when using `refhub items update --tags`, a warning is emitted to stderr confirming the full-replacement behaviour before the request is sent
+5. CLI: `refhub items update <itemId> --vault <id> [--title <t>] [--authors ...] [--year <n>] [--doi <doi>] [--url <url>] [--pdf-url <url>] [--tags <id,id>] [--notes <text>]`
 
 **Delete item** — `vaults:write` + editor
 1. **Warn the user — hard delete, no undo**
@@ -233,6 +234,21 @@ POST   /vaults/:vaultId/items/:itemId/pdf/complete # complete resumable upload
 CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 
 Small PDFs stay on the raw route. Larger vault-item PDFs use `POST /pdf/session`, direct `PUT` of bytes to the returned Google Drive `upload_url`, then `POST /pdf/complete`. Browser/session JWT routes remain under `/api/v1/google-drive/...`; Google Drive account setup/connect/disconnect remains a web UI/session-JWT flow.
+
+**The resulting Drive URL is only ever returned in the upload response** (`data.driveUrl`, alongside `data.fileId`). It is not persisted onto any field returned by `GET /vaults/:vaultId` or `GET /vaults/:vaultId/items/:itemId` — verified 2026-07 against the live API. This is the frontend's `drive_pdf` field (distinct from `pdf_url`/`publisher_pdf` — the two are unrelated fields, deliberately named differently to avoid confusion); it's stored server-side in a separate `publication_pdf_assets` table that isn't currently joined into any read response. Capture `driveUrl` from the upload response immediately if you need to record or display it — do not expect to retrieve it later via a GET.
+
+### Reading a publication's PDF(s)
+
+A publication can have up to two independent PDF references — do not conflate them:
+
+| Field | Frontend label | What it is | How to read it |
+|---|---|---|---|
+| `pdf_url` | `publisher_pdf` | A plain external link (e.g. publisher site, arXiv), stored as a normal text field on the item | Fetch it directly like any other URL. Access depends entirely on the publisher — may be paywalled, may not resolve to a PDF at all. No RefHub auth involved. |
+| `driveUrl` (upload response only) | `drive_pdf` | The file RefHub uploaded to the user's linked Google Drive | Only available at the moment of `refhub pdf upload` — capture it then. **There is no route to read it back later** (see above). |
+
+Even when you do have a Drive URL, it is a Google Drive **view** link (`https://drive.google.com/file/d/<fileId>/view`), not a direct file download. Fetching that URL typically returns an HTML viewer page, not raw PDF bytes. Actual byte-level access requires Google's own Drive API (`GET https://www.googleapis.com/drive/v3/files/<fileId>?alt=media`) with a valid Google OAuth token scoped to that file — the RefHub API-key surface does not provide this to agents today. In practice: an API-key agent can upload a PDF to Drive and get back a shareable link, but **cannot currently re-read that file's contents through the RefHub public API.**
+
+Skill expectation: when asked to read, summarize, or extract from a publication's PDF, check `pdf_url` first and fetch it as a normal web resource. If no `pdf_url` is set and only a Drive upload exists, tell the user the file was uploaded successfully but its contents cannot currently be re-fetched through the API — do not invent or guess a Drive `alt=media` request, since that requires credentials this skill does not have.
 
 ### Tags
 
@@ -341,6 +357,8 @@ The following have no API route and cannot be performed through this skill:
 - Webhooks or event subscriptions
 - Bulk relation import (create individually)
 - Any direct Supabase access as a fallback
+- Reading back an item's stored Google Drive PDF URL (`drive_pdf` in the frontend) after upload — only returned once, in the upload response; no GET route exposes it
+- Reading the byte content of a Drive-hosted PDF at all — even with the Drive URL in hand, it's a view link, not a download link; raw content requires Google's own Drive API with an OAuth token this skill does not have (see "Reading a publication's PDF(s)" above)
 
 If a user requests one of these, state clearly that the feature is not yet available in the public API and do not improvise an alternative.
 

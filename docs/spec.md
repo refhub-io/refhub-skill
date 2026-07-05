@@ -202,7 +202,7 @@ Intent: import references prepared elsewhere.
 
 Endpoint: `POST /api/v1/vaults/:vaultId/items`
 
-Accepts one or more items. Each must include `title`. Tag IDs must already exist. Backend prevalidates and attempts rollback on failure.
+Accepts one or more items. Each must include `title`. Tag IDs must already exist. Backend prevalidates and attempts rollback on failure. Accepts the full publication field set matching the frontend's publication dialog: `authors`, `year`, `doi`, `url`, `abstract`, `pdf_url` (publisher-hosted PDF link), `notes`, `publication_type`, and the remaining bibtex-oriented fields (`journal`, `volume`, `issue`, `pages`, `booktitle`, `chapter`, `edition`, `editor`, `howpublished`, `institution`, `number`, `organization`, `publisher`, `school`, `series`, `type`, `eid`, `isbn`, `issn`, `keywords`) — verified 2026-07 against the live API.
 
 ### 7.9 Update item
 
@@ -210,7 +210,7 @@ Intent: revise notes, metadata, or tags on an existing reference.
 
 Endpoint: `PATCH /api/v1/vaults/:vaultId/items/:itemId`
 
-Partial update. If `tag_ids` is present, it replaces the full tag set. Increments `version` on successful metadata updates.
+Partial update. Accepts the same field set as add items (7.8). If `tag_ids` is present, it replaces the full tag set. Increments `version` on successful metadata updates.
 
 Skill expectation: make tag replacement semantics explicit; distinguish `item not found` from `permission denied`.
 
@@ -367,7 +367,7 @@ Endpoints:
 - Returns the stored asset record including the Drive URL.
 - Errors: `404 publication_not_found` · `413 pdf_upload_too_large_for_api` · `503 drive_not_linked` · `502 drive_upload_failed`.
 
-Skill expectation: surface the Drive URL from the response so the agent can record or display it. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`. `publication_pdf_assets` canonical-row delete/insert behavior is an internal frontend/schema detail, not an agent API promise.
+Skill expectation: surface the Drive URL from the response (`data.driveUrl`) so the agent can record or display it — **this is the only time the API returns it.** `GET /vaults/:vaultId` and `GET /vaults/:vaultId/items/:itemId` do not include the stored Drive URL anywhere (verified 2026-07 against the live API); it is not persisted onto any readable field. This corresponds to the frontend's `drive_pdf` field, which the frontend itself reads via a direct client-side join against `publication_pdf_assets` — not through the public API. `driveUrl` is a deliberately distinct name from `pdf_url` (the publisher-hosted PDF link field on the publication) — they are unrelated fields. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`. `publication_pdf_assets` canonical-row delete/insert behavior is an internal frontend/schema detail, not an agent API promise.
 
 ### 7.26 Semantic Scholar lookup and graph traversal
 
@@ -382,6 +382,19 @@ Endpoints:
 - `POST /api/v1/semantic-scholar/citations` — body `{ paper_id, limit? }` → papers citing this paper
 
 Skill expectation: used as a discovery step before importing new references; agent should offer to add discovered papers to a vault.
+
+### 7.27 Reading a publication's PDF(s)
+
+Intent: fetch or summarize a publication's PDF content — distinguish the two independent PDF references a publication can carry.
+
+| Field | Frontend label | What it is | How to read it |
+|---|---|---|---|
+| `pdf_url` | `publisher_pdf` | Plain external link (publisher site, arXiv, etc.), a normal text field on the item, readable via any `GET` | Fetch directly as a normal web resource. Access depends entirely on the publisher — may be paywalled or may not resolve to an actual PDF. |
+| `driveUrl` (upload response only, see 7.25) | `drive_pdf` | The file RefHub uploaded to the user's linked Google Drive | Only returned once, in the `pdf`/`pdf/complete` upload response. No GET route returns it afterward. |
+
+Even holding a Drive URL, it is a Google Drive **view** link (`https://drive.google.com/file/d/<fileId>/view`), not a raw download — fetching it typically returns an HTML viewer page, not PDF bytes. Byte-level access requires Google's own Drive API (`GET https://www.googleapis.com/drive/v3/files/<fileId>?alt=media`) with a Drive-scoped OAuth token, which the RefHub API-key surface does not expose to agents today.
+
+Skill expectation: check `pdf_url` first and fetch it as a normal web resource for read/summarize requests. If only a Drive upload exists (no `pdf_url`), tell the user the file uploaded successfully but its contents cannot currently be re-fetched via the public API — do not invent a Drive `alt=media` request, since that needs credentials this skill does not have.
 
 ## 8. Failure behavior
 
