@@ -77,7 +77,7 @@ Keys may also be **vault-restricted** — they can only operate on the vault IDs
 Authorization: Bearer <supabase-session-jwt>
 ```
 
-Required for: key management (`/keys`), Google Drive link-management routes, legacy publication-level PDF upload (`POST /publications/:publicationId/pdf`), and global audit (`GET /audit`). API-key agents should use `/semantic-scholar/*` and `/vaults/:vaultId/items/:itemId/pdf*`.
+Required for: key management (`/keys`), Google Drive link-management routes, publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`), and global audit (`GET /audit`). API-key agents should use `/semantic-scholar/*` and `/vaults/:vaultId/items/:itemId/pdf*`.
 
 Session JWTs come from the user's active Supabase session. Prefer API-key routes for normal agent work; ask the user to use the web app for setup/admin flows.
 
@@ -226,16 +226,16 @@ These routes are available to API-key agents under `/semantic-scholar/*` and req
 Requires `vaults:write` and Google Drive already linked through the RefHub web UI. Google Drive connect/disconnect remains a session-JWT/browser setup flow.
 
 ```text
-POST   /vaults/:vaultId/items/:itemId/pdf          # raw application/pdf bytes or JSON source_url → stored in Drive
+POST   /vaults/:vaultId/items/:itemId/pdf          # JSON source_url only → backend fetches and stores in Drive server-side
 POST   /vaults/:vaultId/items/:itemId/pdf/session  # create resumable Drive session
 POST   /vaults/:vaultId/items/:itemId/pdf/complete # complete resumable upload
 ```
 
-CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>` (always uses the resumable flow internally — the CLI never sends raw bytes).
 
-Small PDFs stay on the raw route. Larger vault-item PDFs use `POST /pdf/session`, direct `PUT` of bytes to the returned Google Drive `upload_url`, then `POST /pdf/complete`. Browser/session JWT routes remain under `/api/v1/google-drive/...`; Google Drive account setup/connect/disconnect remains a web UI/session-JWT flow.
+**Raw `application/pdf` request bodies are not accepted on `POST /pdf`** — that route only accepts a JSON `{ "source_url": "..." }` body (the backend fetches the PDF itself, e.g. using institutional-access cookies). Any client already holding the PDF bytes locally — including agents building requests directly rather than through the CLI — must use `POST /pdf/session`, `PUT` the bytes directly to the returned Google Drive `upload_url`, then `POST /pdf/complete`, regardless of file size. A raw PDF body sent to `POST /pdf` returns `410 raw_pdf_upload_removed`. The same applies to the publication-level route below — it has no raw-bytes variant either. Browser/session JWT routes remain under `/api/v1/google-drive/...`; Google Drive account setup/connect/disconnect remains a web UI/session-JWT flow.
 
-**The resulting Drive URL is only ever returned in the upload response** (`data.driveUrl`, alongside `data.fileId`). It is not persisted onto any field returned by `GET /vaults/:vaultId` or `GET /vaults/:vaultId/items/:itemId` — verified 2026-07 against the live API. This is the frontend's `drive_pdf` field (distinct from `pdf_url`/`publisher_pdf` — the two are unrelated fields, deliberately named differently to avoid confusion); it's stored server-side in a separate `publication_pdf_assets` table that isn't currently joined into any read response. Capture `driveUrl` from the upload response immediately if you need to record or display it — do not expect to retrieve it later via a GET.
+**The resulting Drive URL is only ever returned in the upload response** (`data.driveUrl`, alongside `data.fileId`). As of this writing it is not persisted onto any field returned by `GET /vaults/:vaultId` or `GET /vaults/:vaultId/items/:itemId` — verified 2026-07 against the live API, though a `drive_pdf_url` field exposing exactly this is in progress separately (refhub-io/.netlify#22). This is the frontend's `drive_pdf` field (distinct from `pdf_url`/`publisher_pdf` — the two are unrelated fields, deliberately named differently to avoid confusion); it's stored server-side in a separate `publication_pdf_assets` table. Until that field ships, capture `driveUrl` from the upload response immediately if you need to record or display it — do not expect to retrieve it later via a GET.
 
 ### Reading a publication's PDF(s)
 
@@ -324,7 +324,8 @@ Requires any valid API key (data route for vault-scoped; JWT for global).
 | `403` | `vault_access_denied`, `vault_not_found` | No access to this vault with this key. Report and stop. |
 | `404` | `item_not_found`, `tag_not_found`, `relation_not_found` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | (DOI import, duplicate relation) | Resource already exists. Surface the existing item id to the user. |
-| `413` | `request_too_large`, `pdf_upload_too_large_for_api` | Payload too large. Split batch requests; for PDFs, use the API-key item resumable upload flow (`/pdf/session` -> direct Drive `PUT` -> `/pdf/complete`) rather than retrying the raw API upload. |
+| `410` | `raw_pdf_upload_removed` | Sent raw PDF bytes to `POST /pdf` — that route only accepts JSON `{ source_url }`. Switch to the resumable flow (`/pdf/session` -> direct Drive `PUT` -> `/pdf/complete`) instead; do not retry the same request. |
+| `413` | `request_too_large` | Payload too large. Split batch requests. |
 | `429` | `rate_limit_exceeded` | Back off. Use `retry_after_seconds` from the response. |
 | `500` | `bulk_insert_partial_failure`, `bulk_insert_failed` | Partial write may have occurred. Do not retry without `idempotency_key`. Alert user for manual review if partial failure. |
 | `5xx` | `internal_error`, `service_error` | Transient. Retry once with backoff. If it persists, report and stop. |
@@ -375,6 +376,6 @@ If a user requests one of these, state clearly that the feature is not yet avail
 Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
-- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Small PDFs use raw `POST /api/v1/vaults/:vaultId/items/:itemId/pdf`; larger vault-item PDFs use API-key `POST /pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /pdf/complete`. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
-- Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Uploading bytes always uses the resumable flow — API-key `POST /pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /pdf/complete` — at any file size; there is no raw-bytes upload path. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Google Drive connect/disconnect, API-key lifecycle, publication-level PDF upload (`/publications/:publicationId/pdf/session` + `/complete`, session-JWT only, same resumable-only flow), and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
