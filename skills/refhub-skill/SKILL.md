@@ -77,7 +77,7 @@ Keys may also be **vault-restricted** — they can only operate on the vault IDs
 Authorization: Bearer <supabase-session-jwt>
 ```
 
-Required for: key management (`/keys`), Google Drive link-management routes, publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`), and global audit (`GET /audit`). API-key agents should use `/semantic-scholar/*` and `/vaults/:vaultId/items/:itemId/pdf*`.
+Required for: key management (`/keys`), Google Drive link-management routes, and global audit (`GET /audit`). API-key agents should use `/semantic-scholar/*` and `/vaults/:vaultId/items/:itemId/pdf*`. Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`) is API-key compatible too — it just requires `vaults:write`, same as the item-scoped route — despite living outside `/vaults/*`.
 
 Session JWTs come from the user's active Supabase session. Prefer API-key routes for normal agent work; ask the user to use the web app for setup/admin flows.
 
@@ -377,5 +377,6 @@ Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
 - Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Uploading bytes always uses the resumable flow — API-key `POST /pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /pdf/complete` — at any file size; there is no raw-bytes upload path. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
-- Google Drive connect/disconnect, API-key lifecycle, publication-level PDF upload (`/publications/:publicationId/pdf/session` + `/complete`, session-JWT only, same resumable-only flow), and global audit remain session-JWT/browser account-management flows.
+- Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant) also just requires `vaults:write` via API key — not a JWT-only route, despite living outside `/vaults/*`. No CLI command wraps it yet.
+- Google Drive connect/disconnect, API-key lifecycle, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.

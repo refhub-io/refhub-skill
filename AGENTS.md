@@ -39,7 +39,7 @@ Two modes — never mix them.
 Authorization: Bearer rhk_<publicId>_<secret>
 ```
 
-**Session JWT** (management routes — key lifecycle, Google Drive connect/disconnect, legacy publication-level PDF upload, global audit):
+**Session JWT** (management routes — key lifecycle, Google Drive connect/disconnect, global audit):
 ```
 Authorization: Bearer <supabase-session-jwt>
 ```
@@ -238,5 +238,6 @@ Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
 - Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Uploading bytes always uses the resumable flow — API-key `POST /pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /pdf/complete` — at any file size; there is no raw-bytes upload path. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
-- Google Drive connect/disconnect, API-key lifecycle, publication-level PDF upload (`/publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant), and global audit remain session-JWT/browser account-management flows.
+- Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant) also just requires `vaults:write` via API key — it is not a JWT-only route, despite living outside the `/vaults/*` tree. No CLI command wraps it yet; call it directly.
+- Google Drive connect/disconnect, API-key lifecycle, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.

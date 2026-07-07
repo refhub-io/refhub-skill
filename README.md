@@ -198,7 +198,8 @@ Normal agent runtime is API-key-only:
 - All API-key item PDF uploads use the resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete` — at any file size, with no raw-bytes upload path. `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` itself only accepts a JSON `{ source_url }` body now; a raw `application/pdf` body there returns `410 raw_pdf_upload_removed`.
 - The resulting Google Drive URL is returned as `data.driveUrl` (with `data.fileId`) in the complete response — **and only there.** No GET route returns it afterward; see the field-parity note below. `driveUrl` is deliberately distinct from `pdf_url` (the publisher-hosted PDF link) — they are unrelated fields that happened to share a near-identical name before this rename.
 - Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`. API-key agents must not call those `/google-drive/...` routes.
-- Google Drive connect/disconnect, API-key lifecycle, publication-level PDF upload (`/publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant), and global audit remain session-JWT/browser account-management flows.
+- Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant) also just requires `vaults:write` via API key — not a JWT-only route, despite living outside `/vaults/*`. No CLI command wraps it yet.
+- Google Drive connect/disconnect, API-key lifecycle, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
 
 ## Publication field parity with the frontend (2026-07)

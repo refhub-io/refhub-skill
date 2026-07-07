@@ -13,7 +13,6 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 - `GET    /api/v1/audit`                                    all audit logs for key owner
 - `POST   /api/v1/recommendations|references|citations|lookup|doi-metadata|search` legacy frontend Semantic Scholar routes (JWT-only; agents use `/semantic-scholar/*`)
 - `GET/POST/DELETE /api/v1/google-drive`                   Drive link management (JWT-only)
-- `POST   /api/v1/publications/:publicationId/pdf/session|complete` resumable publication-level PDF upload to Drive (JWT-only, no raw-bytes variant)
 - `POST   /api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf` browser/session item PDF upload — JSON `source_url` only, no raw bytes (JWT-only)
 - `POST   /api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf/session|complete` browser/session resumable item PDF upload (JWT-only)
 
@@ -73,6 +72,7 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 - `POST   /api/v1/vaults/:vaultId/items/:itemId/pdf`
 - `POST   /api/v1/vaults/:vaultId/items/:itemId/pdf/session`
 - `POST   /api/v1/vaults/:vaultId/items/:itemId/pdf/complete`
+- `POST   /api/v1/publications/:publicationId/pdf/session|complete` — publication-level (no vault), same resumable-only flow, requires `vaults:write` via API key like the routes above; not JWT-only despite living outside `/vaults/*`. No CLI command wraps it yet.
 
 The CLI always uses the API-key `/session` + `/complete` routes, at any file size — there is no raw-bytes upload path. `POST /pdf` itself only accepts a JSON `{ source_url }` body (server-side fetch); a raw PDF body there returns `410 raw_pdf_upload_removed`. The returned `upload_url` is a Google Drive resumable URL; clients upload bytes directly to Drive before completing the item asset through the API-key route. Browser/session resumable uploads stay under `/google-drive/...`.
 
@@ -213,6 +213,7 @@ Normal agent runtime is API-key-only:
 - Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 - All API-key item PDF uploads use the resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete` — at any file size. `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` itself only accepts a JSON `{ source_url }` body now; raw `application/pdf` bytes there return `410 raw_pdf_upload_removed`.
 - Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`. API-key agents must not call those `/google-drive/...` routes.
-- Google Drive connect/disconnect, API-key lifecycle, publication-level PDF upload (`/publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant), and global audit remain session-JWT/browser account-management flows.
+- Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant) also just requires `vaults:write` via API key — not a JWT-only route. No CLI command wraps it yet.
+- Google Drive connect/disconnect, API-key lifecycle, and global audit remain session-JWT/browser account-management flows.
 - `publication_pdf_assets` canonical-row delete/insert behavior is an internal frontend/schema detail; do not depend on PostgREST upsert semantics for that table from agents.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
