@@ -119,7 +119,7 @@ The skill supports all workflows already backed by the current public API:
 18. Read audit logs for the key's owner, optionally scoped to a vault.
 19. Provide enough response structure for downstream summarization, note generation, or local transformation.
 20. Enrich incomplete vault items by fetching full metadata from Semantic Scholar (requires API key with `vaults:read`; patching requires `vaults:write`).
-21. Upload PDFs to the user's linked Google Drive and link them to a vault item using API-key item routes (small PDFs use raw upload; larger vault-item PDFs use `/pdf/session`, direct Drive `PUT`, then `/pdf/complete`).
+21. Upload PDFs to the user's linked Google Drive and link them to a vault item using the API-key resumable flow (`/pdf/session`, direct Drive `PUT`, then `/pdf/complete`), at any file size — there is no raw-bytes upload path.
 22. Look up Semantic Scholar paper IDs and fetch recommendations, references, and citations for a paper.
 
 ## 6. Non-goals
@@ -202,7 +202,7 @@ Intent: import references prepared elsewhere.
 
 Endpoint: `POST /api/v1/vaults/:vaultId/items`
 
-Accepts one or more items. Each must include `title`. Tag IDs must already exist. Backend prevalidates and attempts rollback on failure.
+Accepts one or more items. Each must include `title`. Tag IDs must already exist. Backend prevalidates and attempts rollback on failure. Accepts the full publication field set matching the frontend's publication dialog: `authors`, `year`, `doi`, `url`, `abstract`, `pdf_url` (publisher-hosted PDF link), `notes`, `publication_type`, and the remaining bibtex-oriented fields (`journal`, `volume`, `issue`, `pages`, `booktitle`, `chapter`, `edition`, `editor`, `howpublished`, `institution`, `number`, `organization`, `publisher`, `school`, `series`, `type`, `eid`, `isbn`, `issn`, `keywords`) — verified 2026-07 against the live API.
 
 ### 7.9 Update item
 
@@ -210,7 +210,7 @@ Intent: revise notes, metadata, or tags on an existing reference.
 
 Endpoint: `PATCH /api/v1/vaults/:vaultId/items/:itemId`
 
-Partial update. If `tag_ids` is present, it replaces the full tag set. Increments `version` on successful metadata updates.
+Partial update. Accepts the same field set as add items (7.8). If `tag_ids` is present, it replaces the full tag set. Increments `version` on successful metadata updates.
 
 Skill expectation: make tag replacement semantics explicit; distinguish `item not found` from `permission denied`.
 
@@ -355,19 +355,17 @@ Requires: API key with `vaults:write` + Google Drive linked to the account throu
 
 Endpoints:
 
-- `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` — small raw `application/pdf` bytes.
-- `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session` — create a resumable Google Drive upload session for larger vault-item PDFs.
+- `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session` — create a resumable Google Drive upload session. This is the only way to upload PDF bytes a client already holds locally, at any file size.
 - direct `PUT` of PDF bytes to the returned Google Drive `upload_url`.
 - `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete` — complete the item asset after Drive upload.
 
 - use the vault item id in the route.
-- Raw API uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB).
-- Oversized raw uploads return structured `413 pdf_upload_too_large_for_api`; do not retry them through the raw route. Use the API-key item resumable flow for larger vault-item PDFs.
+- `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` no longer accepts raw `application/pdf` bytes — it only accepts a JSON `{ source_url }` body (the backend fetches the PDF server-side, e.g. using institutional-access cookies, so it is never subject to a client-payload size limit). A raw PDF body sent there returns structured `410 raw_pdf_upload_removed`; do not retry it there — use the resumable flow above instead.
 - Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`; API-key agents must not call those `/google-drive/...` routes.
 - Returns the stored asset record including the Drive URL.
-- Errors: `404 publication_not_found` · `413 pdf_upload_too_large_for_api` · `503 drive_not_linked` · `502 drive_upload_failed`.
+- Errors: `404 publication_not_found` · `503 drive_not_linked` · `502 drive_upload_failed`.
 
-Skill expectation: surface the Drive URL from the response so the agent can record or display it. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`. `publication_pdf_assets` canonical-row delete/insert behavior is an internal frontend/schema detail, not an agent API promise.
+Skill expectation: surface the Drive URL from the response (`data.driveUrl`) so the agent can record or display it immediately. It's also readable back afterward as `drive_pdf_url` on `GET /vaults/:vaultId`, `GET /vaults/:vaultId/items/:itemId`, and the refreshed row returned by `PATCH .../items/:itemId`. This corresponds to the frontend's `drive_pdf` field, which the frontend itself reads via a direct client-side join against `publication_pdf_assets` — the API's `drive_pdf_url` surfaces the same value for clients that don't have direct Supabase access. `driveUrl`/`drive_pdf_url` are deliberately distinct names from `pdf_url` (the publisher-hosted PDF link field on the publication) — they are unrelated fields. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`. `publication_pdf_assets` canonical-row delete/insert behavior is an internal frontend/schema detail, not an agent API promise.
 
 ### 7.26 Semantic Scholar lookup and graph traversal
 
@@ -382,6 +380,19 @@ Endpoints:
 - `POST /api/v1/semantic-scholar/citations` — body `{ paper_id, limit? }` → papers citing this paper
 
 Skill expectation: used as a discovery step before importing new references; agent should offer to add discovered papers to a vault.
+
+### 7.27 Reading a publication's PDF(s)
+
+Intent: fetch or summarize a publication's PDF content — distinguish the two independent PDF references a publication can carry.
+
+| Field | Frontend label | What it is | How to read it |
+|---|---|---|---|
+| `pdf_url` | `publisher_pdf` | Plain external link (publisher site, arXiv, etc.), a normal text field on the item, readable via any `GET` | Fetch directly as a normal web resource. Access depends entirely on the publisher — may be paywalled or may not resolve to an actual PDF. |
+| `driveUrl` (upload response, see 7.25) / `drive_pdf_url` (read routes) | `drive_pdf` | The file RefHub uploaded to the user's linked Google Drive | Returned immediately in the `pdf`/`pdf/complete` upload response as `driveUrl`, and readable back afterward as `drive_pdf_url` on `GET /vaults/:vaultId`, `GET /vaults/:vaultId/items/:itemId`, and the refreshed row from `PATCH .../items/:itemId`. |
+
+Even holding a Drive URL, it is a Google Drive **view** link (`https://drive.google.com/file/d/<fileId>/view`), not a raw download — fetching it typically returns an HTML viewer page, not PDF bytes. Byte-level access requires Google's own Drive API (`GET https://www.googleapis.com/drive/v3/files/<fileId>?alt=media`) with a Drive-scoped OAuth token, which the RefHub API-key surface does not expose to agents today — this part is still true regardless of the URL itself being readable.
+
+Skill expectation: check `pdf_url` first and fetch it as a normal web resource for read/summarize requests. If only a Drive upload exists (no `pdf_url`), tell the user the file's *link* is available (`drive_pdf_url`) but its *contents* cannot currently be re-fetched via the public API — do not invent a Drive `alt=media` request, since that needs credentials this skill does not have.
 
 ## 8. Failure behavior
 
@@ -461,8 +472,9 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 - search, stats, and changes feed
 - JSON and BibTeX export
 - audit log read endpoints
-- Semantic Scholar: `POST /semantic-scholar/doi-metadata`, `/lookup`, `/search`, `/recommendations`, `/references`, `/citations` (API key)
+- Semantic Scholar: `POST /semantic-scholar/doi-metadata`, `/lookup`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by` (API key)
 - PDF upload to Google Drive: `POST /vaults/:vaultId/items/:itemId/pdf`, `/pdf/session`, and `/pdf/complete` (API key)
+- Publication-level PDF upload (no vault, for library-only papers): `POST /publications/:publicationId/pdf/session` and `/complete` — also API key (`vaults:write`), not JWT-only
 
 ### Deferred
 
@@ -489,8 +501,8 @@ Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
 - Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
-- Small PDFs use raw `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with `application/pdf` bytes. Raw API uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB).
-- Larger vault-item PDFs use the API-key resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete`.
+- All API-key item PDF uploads use the resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete` — at any file size. `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` itself only accepts a JSON `{ source_url }` body now; raw `application/pdf` bytes there return `410 raw_pdf_upload_removed`.
 - Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`. API-key agents must not call those `/google-drive/...` routes.
-- Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant) also just requires `vaults:write` via API key — not a JWT-only route, despite living outside `/vaults/*`. No CLI command wraps it yet.
+- Google Drive connect/disconnect, API-key lifecycle, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.

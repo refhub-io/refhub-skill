@@ -7,6 +7,19 @@ description: Use when an agent needs to interact with RefHub — reading, writin
 
 If the `refhub` CLI is available in the environment (`which refhub` succeeds), use it for **API key (data) routes** — it handles authentication, error formatting, and consistent output.
 
+**If it is not available**, ask the user before falling back to direct HTTP calls — don't silently skip straight to raw API requests. Ask upfront, with the setup commands included:
+
+> The RefHub CLI isn't installed. It's the recommended way to run RefHub workflows — it handles auth, consistent JSON output, and error formatting for you. Want me to set it up now?
+>
+> ```sh
+> npm install -g @refhub/cli
+> export REFHUB_API_KEY=rhk_<publicId>_<secret>   # get one from the RefHub web UI if you don't have one yet
+> ```
+>
+> If you'd rather not, I'll call the API directly for this session instead.
+
+If the user declines (or doesn't respond, or the environment can't run `npm install`), proceed with direct HTTP calls as documented in `docs/` — don't block the task on CLI setup.
+
 **Setup:** The CLI reads `REFHUB_API_KEY` from the environment. A `--api-key` flag overrides it for one-off calls.
 
 **Command reference:** Run `refhub --help` or `refhub <group> --help` (e.g. `refhub vaults --help`) to see available commands and flags.
@@ -77,7 +90,7 @@ Keys may also be **vault-restricted** — they can only operate on the vault IDs
 Authorization: Bearer <supabase-session-jwt>
 ```
 
-Required for: key management (`/keys`), Google Drive link-management routes, legacy publication-level PDF upload (`POST /publications/:publicationId/pdf`), and global audit (`GET /audit`). API-key agents should use `/semantic-scholar/*` and `/vaults/:vaultId/items/:itemId/pdf*`.
+Required for: key management (`/keys`), Google Drive link-management routes, and global audit (`GET /audit`). API-key agents should use `/semantic-scholar/*` and `/vaults/:vaultId/items/:itemId/pdf*`. Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`) is API-key compatible too — it just requires `vaults:write`, same as the item-scoped route — despite living outside `/vaults/*`.
 
 Session JWTs come from the user's active Supabase session. Prefer API-key routes for normal agent work; ask the user to use the web app for setup/admin flows.
 
@@ -143,19 +156,20 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 
 **Add items** — `vaults:write` + editor
 1. Confirm vault access and that `tag_ids` (if any) already exist in the vault
-2. `POST /vaults/:vaultId/items` with `{ items: [{ title, authors?, year?, doi?, tag_ids?, notes?, ... }] }`
+2. `POST /vaults/:vaultId/items` with `{ items: [{ title, authors?, year?, doi?, url?, pdf_url?, notes?, tag_ids?, ... }] }`. The full bibtex-oriented field set is accepted (`journal`, `volume`, `issue`, `pages`, `abstract`, `publication_type`, `booktitle`, `chapter`, `edition`, `editor`, `howpublished`, `institution`, `number`, `organization`, `publisher`, `school`, `series`, `type`, `eid`, `isbn`, `issn`, `keywords`), matching the frontend's publication dialog fields one-for-one.
 3. Each item must include `title`; `tag_ids` must reference existing vault tags
 4. `authors` is a **string array** (e.g. `["Smith J", "Doe A"]`), not a plain string. The CLI `--authors` flag accepts comma-separated input and converts automatically.
-5. `notes` is a free-text field on the item (agent-facing annotations, not a separate resource) — pass it straight through as a string
-6. On partial failure the backend attempts rollback; treat `bulk_insert_partial_failure` as a high-severity error requiring manual review
-7. CLI: `refhub items add --vault <id> --title <t> [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--tags <id,id>] [--notes <text>]`
+5. `url` is the publication's own link; `pdf_url` is the frontend's `publisher_pdf` field (a link to a publisher-hosted PDF) — distinct from the Google Drive-hosted copy, see PDF upload below.
+6. `notes` is a free-text field on the item (agent-facing annotations, not a separate resource) — pass it straight through as a string
+7. On partial failure the backend attempts rollback; treat `bulk_insert_partial_failure` as a high-severity error requiring manual review
+8. CLI: `refhub items add --vault <id> --title <t> [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--url <url>] [--pdf-url <url>] [--tags <id,id>] [--notes <text>]`
 
 **Update item** — `vaults:write` + editor
-1. `PATCH /vaults/:vaultId/items/:itemId` with any publication fields, including `notes`
+1. `PATCH /vaults/:vaultId/items/:itemId` with any publication fields (same set as add, above), including `notes`
 2. If `tag_ids` is included, it **replaces the full tag set** — not additive
 3. `version` increments automatically on metadata updates
-4. CLI: `refhub items update <itemId> --vault <id> [--title <t>] [--authors "Smith J,Doe A"] [--year <n>] [--doi <doi>] [--tags <id,id>] [--notes <text>]`
-5. CLI: when using `refhub items update --tags`, a warning is emitted to stderr confirming the full-replacement behaviour before the request is sent
+4. CLI: when using `refhub items update --tags`, a warning is emitted to stderr confirming the full-replacement behaviour before the request is sent
+5. CLI: `refhub items update <itemId> --vault <id> [--title <t>] [--authors ...] [--year <n>] [--doi <doi>] [--url <url>] [--pdf-url <url>] [--tags <id,id>] [--notes <text>]`
 
 **Delete item** — `vaults:write` + editor
 1. **Warn the user — hard delete, no undo**
@@ -225,14 +239,29 @@ These routes are available to API-key agents under `/semantic-scholar/*` and req
 Requires `vaults:write` and Google Drive already linked through the RefHub web UI. Google Drive connect/disconnect remains a session-JWT/browser setup flow.
 
 ```text
-POST   /vaults/:vaultId/items/:itemId/pdf          # raw application/pdf bytes or JSON source_url → stored in Drive
+POST   /vaults/:vaultId/items/:itemId/pdf          # JSON source_url only → backend fetches and stores in Drive server-side
 POST   /vaults/:vaultId/items/:itemId/pdf/session  # create resumable Drive session
 POST   /vaults/:vaultId/items/:itemId/pdf/complete # complete resumable upload
 ```
 
-CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>` (always uses the resumable flow internally — the CLI never sends raw bytes).
 
-Small PDFs stay on the raw route. Larger vault-item PDFs use `POST /pdf/session`, direct `PUT` of bytes to the returned Google Drive `upload_url`, then `POST /pdf/complete`. Browser/session JWT routes remain under `/api/v1/google-drive/...`; Google Drive account setup/connect/disconnect remains a web UI/session-JWT flow.
+**Raw `application/pdf` request bodies are not accepted on `POST /vaults/:vaultId/items/:itemId/pdf`** — that route only accepts a JSON `{ "source_url": "..." }` body (the backend fetches the PDF itself, e.g. using institutional-access cookies). Any client already holding the PDF bytes locally — including agents building requests directly rather than through the CLI — must use `POST /vaults/:vaultId/items/:itemId/pdf/session`, `PUT` the bytes directly to the returned Google Drive `upload_url`, then `POST /vaults/:vaultId/items/:itemId/pdf/complete`, regardless of file size. A raw PDF body sent to `POST /vaults/:vaultId/items/:itemId/pdf` returns `410 raw_pdf_upload_removed`. The same applies to the publication-level route below — it has no raw-bytes variant either. Browser/session JWT routes remain under `/api/v1/google-drive/...`; Google Drive account setup/connect/disconnect remains a web UI/session-JWT flow.
+
+**The resulting Drive URL is returned immediately in the upload response** (`data.driveUrl`, alongside `data.fileId`). It's also readable back afterward as `drive_pdf_url` on `GET /vaults/:vaultId`, `GET /vaults/:vaultId/items/:itemId`, and the refreshed row returned by `PATCH .../items/:itemId`. This is the frontend's `drive_pdf` field (distinct from `pdf_url`/`publisher_pdf` — the two are unrelated fields, deliberately named differently to avoid confusion); it's stored server-side in a separate `publication_pdf_assets` table.
+
+### Reading a publication's PDF(s)
+
+A publication can have up to two independent PDF references — do not conflate them:
+
+| Field | Frontend label | What it is | How to read it |
+|---|---|---|---|
+| `pdf_url` | `publisher_pdf` | A plain external link (e.g. publisher site, arXiv), stored as a normal text field on the item | Fetch it directly like any other URL. Access depends entirely on the publisher — may be paywalled, may not resolve to a PDF at all. No RefHub auth involved. |
+| `driveUrl` (upload response) / `drive_pdf_url` (read routes) | `drive_pdf` | The file RefHub uploaded to the user's linked Google Drive | Returned in the upload response as `driveUrl`, and readable back afterward as `drive_pdf_url` on item reads (see above). Getting the *link* does not mean you can fetch the file's *contents* — see below. |
+
+Even when you do have a Drive URL, it is a Google Drive **view** link (`https://drive.google.com/file/d/<fileId>/view`), not a direct file download. Fetching that URL typically returns an HTML viewer page, not raw PDF bytes. Actual byte-level access requires Google's own Drive API (`GET https://www.googleapis.com/drive/v3/files/<fileId>?alt=media`) with a valid Google OAuth token scoped to that file — the RefHub API-key surface does not provide this to agents today. In practice: an API-key agent can get the Drive link for an uploaded PDF (both immediately and later, via a read route), but **cannot currently fetch that file's contents through the RefHub public API.**
+
+Skill expectation: when asked to read, summarize, or extract from a publication's PDF, check `pdf_url` first and fetch it as a normal web resource. If no `pdf_url` is set and only a Drive upload exists, tell the user you have the Drive link (`drive_pdf_url`) but its contents cannot currently be fetched through the API — do not invent or guess a Drive `alt=media` request, since that requires credentials this skill does not have.
 
 ### Tags
 
@@ -308,7 +337,8 @@ Requires any valid API key (data route for vault-scoped; JWT for global).
 | `403` | `vault_access_denied`, `vault_not_found` | No access to this vault with this key. Report and stop. |
 | `404` | `item_not_found`, `tag_not_found`, `relation_not_found` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | (DOI import, duplicate relation) | Resource already exists. Surface the existing item id to the user. |
-| `413` | `request_too_large`, `pdf_upload_too_large_for_api` | Payload too large. Split batch requests; for PDFs, use the API-key item resumable upload flow (`/pdf/session` -> direct Drive `PUT` -> `/pdf/complete`) rather than retrying the raw API upload. |
+| `410` | `raw_pdf_upload_removed` | Sent raw PDF bytes to `POST /vaults/:vaultId/items/:itemId/pdf` — that route only accepts JSON `{ source_url }`. Switch to the resumable flow (`/vaults/:vaultId/items/:itemId/pdf/session` -> direct Drive `PUT` -> `/vaults/:vaultId/items/:itemId/pdf/complete`) instead; do not retry the same request. |
+| `413` | `request_too_large` | Payload too large. Split batch requests. |
 | `429` | `rate_limit_exceeded` | Back off. Use `retry_after_seconds` from the response. |
 | `500` | `bulk_insert_partial_failure`, `bulk_insert_failed` | Partial write may have occurred. Do not retry without `idempotency_key`. Alert user for manual review if partial failure. |
 | `5xx` | `internal_error`, `service_error` | Transient. Retry once with backoff. If it persists, report and stop. |
@@ -341,6 +371,7 @@ The following have no API route and cannot be performed through this skill:
 - Webhooks or event subscriptions
 - Bulk relation import (create individually)
 - Any direct Supabase access as a fallback
+- Reading the byte content of a Drive-hosted PDF at all — even with the Drive URL in hand (readable via `drive_pdf_url`, see "Reading a publication's PDF(s)" above), it's a view link, not a download link; raw content requires Google's own Drive API with an OAuth token this skill does not have
 
 If a user requests one of these, state clearly that the feature is not yet available in the public API and do not improvise an alternative.
 
@@ -357,6 +388,7 @@ If a user requests one of these, state clearly that the feature is not yet avail
 Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
-- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Small PDFs use raw `POST /api/v1/vaults/:vaultId/items/:itemId/pdf`; larger vault-item PDFs use API-key `POST /pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /pdf/complete`. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
-- Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Uploading bytes always uses the resumable flow — API-key `POST /vaults/:vaultId/items/:itemId/pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /vaults/:vaultId/items/:itemId/pdf/complete` — at any file size; there is no raw-bytes upload path. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant) also just requires `vaults:write` via API key — not a JWT-only route, despite living outside `/vaults/*`. No CLI command wraps it yet.
+- Google Drive connect/disconnect, API-key lifecycle, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.

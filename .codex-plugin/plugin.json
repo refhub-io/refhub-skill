@@ -1,6 +1,6 @@
 {
   "name": "refhub-skill",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Agent skill for operating RefHub through its public API v2 - manage vaults, items, tags, relations, imports, search, export, and audit logs",
   "skills": "./skills/",
   "author": {

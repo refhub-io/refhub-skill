@@ -195,8 +195,19 @@ Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
 - Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
-- Small PDFs use raw `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` with `application/pdf` bytes. Raw API uploads are capped at the smallest of `REFHUB_API_MAX_BODY_BYTES`, `GOOGLE_DRIVE_MAX_UPLOAD_BYTES`, and the Netlify synchronous Function ceiling (6 MiB).
-- Larger vault-item PDFs use the API-key resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete`.
+- All API-key item PDF uploads use the resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete` — at any file size, with no raw-bytes upload path. `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` itself only accepts a JSON `{ source_url }` body now; a raw `application/pdf` body there returns `410 raw_pdf_upload_removed`.
+- The resulting Google Drive URL is returned as `data.driveUrl` (with `data.fileId`) in the complete response immediately, and is also readable back afterward as `drive_pdf_url` on item reads — see the field-parity note below. `driveUrl`/`drive_pdf_url` are deliberately distinct from `pdf_url` (the publisher-hosted PDF link) — they are unrelated fields that happened to share a near-identical name before this rename.
 - Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`. API-key agents must not call those `/google-drive/...` routes.
-- Google Drive connect/disconnect, API-key lifecycle, legacy `/publications/:publicationId/pdf`, and global audit remain session-JWT/browser account-management flows.
+- Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant) also just requires `vaults:write` via API key — not a JWT-only route, despite living outside `/vaults/*`. No CLI command wraps it yet.
+- Google Drive connect/disconnect, API-key lifecycle, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
+
+## Publication field parity with the frontend (2026-07)
+
+Verified against the live API that `POST/PATCH /vaults/:vaultId/items[/:itemId]` already accept the full field set from the frontend's publication dialog (`url`, `pdf_url`/`publisher_pdf`, `notes`, plus the bibtex-oriented fields) — CLI `items add`/`items update` now expose `--url` and `--pdf-url` alongside the existing `--notes`.
+
+`refhub pdf upload` performs a real Drive upload and returns the resulting URL in its response (`data.driveUrl`) immediately. It's also readable back afterward as `drive_pdf_url` on `items get`/`items list`/the refreshed row from `items update`. See `docs/spec.md` §7.25 and `docs/api-mapping.md` for details.
+
+**Naming:** `data.driveUrl` (upload response) / `drive_pdf_url` (read routes) and `pdf_url` (publisher-hosted PDF, on the publication object) are unrelated fields — deliberately named differently to avoid confusion, since they used to share a near-identical name (`pdfUrl`) before this rename.
+
+**Reading PDFs:** `pdf_url` is a plain external link — fetch it like any web resource. `drive_pdf_url`/`driveUrl` is a Google Drive `view` link — even once you have it, its content isn't a raw download; actual byte content requires Google's Drive API with an OAuth token this skill doesn't have. See `docs/spec.md` §7.27 and `SKILL.md`'s "Reading a publication's PDF(s)" section.
