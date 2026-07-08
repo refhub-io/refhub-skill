@@ -472,8 +472,9 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 - search, stats, and changes feed
 - JSON and BibTeX export
 - audit log read endpoints
-- Semantic Scholar: `POST /semantic-scholar/doi-metadata`, `/lookup`, `/search`, `/recommendations`, `/references`, `/citations` (API key)
+- Semantic Scholar: `POST /semantic-scholar/doi-metadata`, `/lookup`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by` (API key)
 - PDF upload to Google Drive: `POST /vaults/:vaultId/items/:itemId/pdf`, `/pdf/session`, and `/pdf/complete` (API key)
+- Publication-level PDF upload (no vault, for library-only papers): `POST /publications/:publicationId/pdf/session` and `/complete` — also API key (`vaults:write`), not JWT-only
 
 ### Deferred
 
