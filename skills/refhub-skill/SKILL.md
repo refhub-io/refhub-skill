@@ -248,7 +248,7 @@ CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>` (al
 
 **Raw `application/pdf` request bodies are not accepted on `POST /pdf`** — that route only accepts a JSON `{ "source_url": "..." }` body (the backend fetches the PDF itself, e.g. using institutional-access cookies). Any client already holding the PDF bytes locally — including agents building requests directly rather than through the CLI — must use `POST /pdf/session`, `PUT` the bytes directly to the returned Google Drive `upload_url`, then `POST /pdf/complete`, regardless of file size. A raw PDF body sent to `POST /pdf` returns `410 raw_pdf_upload_removed`. The same applies to the publication-level route below — it has no raw-bytes variant either. Browser/session JWT routes remain under `/api/v1/google-drive/...`; Google Drive account setup/connect/disconnect remains a web UI/session-JWT flow.
 
-**The resulting Drive URL is only ever returned in the upload response** (`data.driveUrl`, alongside `data.fileId`). As of this writing it is not persisted onto any field returned by `GET /vaults/:vaultId` or `GET /vaults/:vaultId/items/:itemId` — verified 2026-07 against the live API, though a `drive_pdf_url` field exposing exactly this is in progress separately (refhub-io/.netlify#22). This is the frontend's `drive_pdf` field (distinct from `pdf_url`/`publisher_pdf` — the two are unrelated fields, deliberately named differently to avoid confusion); it's stored server-side in a separate `publication_pdf_assets` table. Until that field ships, capture `driveUrl` from the upload response immediately if you need to record or display it — do not expect to retrieve it later via a GET.
+**The resulting Drive URL is returned immediately in the upload response** (`data.driveUrl`, alongside `data.fileId`). It's also readable back afterward as `drive_pdf_url` on `GET /vaults/:vaultId`, `GET /vaults/:vaultId/items/:itemId`, and the refreshed row returned by `PATCH .../items/:itemId`. This is the frontend's `drive_pdf` field (distinct from `pdf_url`/`publisher_pdf` — the two are unrelated fields, deliberately named differently to avoid confusion); it's stored server-side in a separate `publication_pdf_assets` table.
 
 ### Reading a publication's PDF(s)
 
@@ -257,11 +257,11 @@ A publication can have up to two independent PDF references — do not conflate 
 | Field | Frontend label | What it is | How to read it |
 |---|---|---|---|
 | `pdf_url` | `publisher_pdf` | A plain external link (e.g. publisher site, arXiv), stored as a normal text field on the item | Fetch it directly like any other URL. Access depends entirely on the publisher — may be paywalled, may not resolve to a PDF at all. No RefHub auth involved. |
-| `driveUrl` (upload response only) | `drive_pdf` | The file RefHub uploaded to the user's linked Google Drive | Only available at the moment of `refhub pdf upload` — capture it then. **There is no route to read it back later** (see above). |
+| `driveUrl` (upload response) / `drive_pdf_url` (read routes) | `drive_pdf` | The file RefHub uploaded to the user's linked Google Drive | Returned in the upload response as `driveUrl`, and readable back afterward as `drive_pdf_url` on item reads (see above). Getting the *link* does not mean you can fetch the file's *contents* — see below. |
 
-Even when you do have a Drive URL, it is a Google Drive **view** link (`https://drive.google.com/file/d/<fileId>/view`), not a direct file download. Fetching that URL typically returns an HTML viewer page, not raw PDF bytes. Actual byte-level access requires Google's own Drive API (`GET https://www.googleapis.com/drive/v3/files/<fileId>?alt=media`) with a valid Google OAuth token scoped to that file — the RefHub API-key surface does not provide this to agents today. In practice: an API-key agent can upload a PDF to Drive and get back a shareable link, but **cannot currently re-read that file's contents through the RefHub public API.**
+Even when you do have a Drive URL, it is a Google Drive **view** link (`https://drive.google.com/file/d/<fileId>/view`), not a direct file download. Fetching that URL typically returns an HTML viewer page, not raw PDF bytes. Actual byte-level access requires Google's own Drive API (`GET https://www.googleapis.com/drive/v3/files/<fileId>?alt=media`) with a valid Google OAuth token scoped to that file — the RefHub API-key surface does not provide this to agents today. In practice: an API-key agent can get the Drive link for an uploaded PDF (both immediately and later, via a read route), but **cannot currently fetch that file's contents through the RefHub public API.**
 
-Skill expectation: when asked to read, summarize, or extract from a publication's PDF, check `pdf_url` first and fetch it as a normal web resource. If no `pdf_url` is set and only a Drive upload exists, tell the user the file was uploaded successfully but its contents cannot currently be re-fetched through the API — do not invent or guess a Drive `alt=media` request, since that requires credentials this skill does not have.
+Skill expectation: when asked to read, summarize, or extract from a publication's PDF, check `pdf_url` first and fetch it as a normal web resource. If no `pdf_url` is set and only a Drive upload exists, tell the user you have the Drive link (`drive_pdf_url`) but its contents cannot currently be fetched through the API — do not invent or guess a Drive `alt=media` request, since that requires credentials this skill does not have.
 
 ### Tags
 
@@ -371,8 +371,7 @@ The following have no API route and cannot be performed through this skill:
 - Webhooks or event subscriptions
 - Bulk relation import (create individually)
 - Any direct Supabase access as a fallback
-- Reading back an item's stored Google Drive PDF URL (`drive_pdf` in the frontend) after upload — only returned once, in the upload response; no GET route exposes it
-- Reading the byte content of a Drive-hosted PDF at all — even with the Drive URL in hand, it's a view link, not a download link; raw content requires Google's own Drive API with an OAuth token this skill does not have (see "Reading a publication's PDF(s)" above)
+- Reading the byte content of a Drive-hosted PDF at all — even with the Drive URL in hand (readable via `drive_pdf_url`, see "Reading a publication's PDF(s)" above), it's a view link, not a download link; raw content requires Google's own Drive API with an OAuth token this skill does not have
 
 If a user requests one of these, state clearly that the feature is not yet available in the public API and do not improvise an alternative.
 

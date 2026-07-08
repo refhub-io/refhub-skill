@@ -194,7 +194,7 @@ Current scopes:
 - Google Drive link management (`GET/POST/DELETE /google-drive`) is a separate JWT management workflow outside the normal agent-facing skill surface.
 - Browser/session JWT item PDF routes are under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`; API-key agents must not call those `/google-drive/...` routes.
 - Google Drive resumable session creation forwards only validated browser `Origin` values. Defaults include `https://refhub.io`, `http://localhost:3000`, `http://localhost:5173`, and `http://localhost:8081`; explicit `REFHUB_API_ALLOWED_ORIGINS` overrides must include the active frontend/dev origin.
-- There is no API route to read back a Drive-hosted PDF's URL or content after upload — see `docs/spec.md` §7.27 for the full read/access contract for both `pdf_url` (publisher PDF) and the Drive-hosted copy.
+- The Drive-hosted PDF's URL is readable back after upload as `drive_pdf_url` on item reads (its *content*/bytes are not — that still requires a Drive-scoped OAuth token this skill doesn't have) — see `docs/spec.md` §7.27 for the full read/access contract for both `pdf_url` (publisher PDF) and the Drive-hosted copy.
 
 ## 6. Practical implication for skill design
 
