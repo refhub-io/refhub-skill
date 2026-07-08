@@ -199,8 +199,8 @@ POST   /vaults/:vaultId/items/:itemId/pdf/session  # create resumable Drive sess
 POST   /vaults/:vaultId/items/:itemId/pdf/complete # complete resumable upload
 ```
 
-- There is no raw-bytes upload path, at any file size. Use the resumable flow: create `/pdf/session`, direct `PUT` bytes to the returned Google Drive `upload_url`, then call `/pdf/complete`.
-- `POST /pdf` itself only accepts a JSON `{ source_url }` body; a raw PDF body there returns `410 raw_pdf_upload_removed`.
+- There is no raw-bytes upload path, at any file size. Use the resumable flow: create `/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` bytes to the returned Google Drive `upload_url`, then call `/vaults/:vaultId/items/:itemId/pdf/complete`.
+- `POST /vaults/:vaultId/items/:itemId/pdf` itself only accepts a JSON `{ source_url }` body; a raw PDF body there returns `410 raw_pdf_upload_removed`.
 - CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>` (always uses the resumable flow internally)
 - Errors: `404 publication_not_found` · `503 drive_not_linked` · `502 drive_upload_failed`
 
@@ -224,7 +224,7 @@ GET    /audit?since=&until=&per_page=&page=            # global (JWT only)
 | `403 vault_access_denied` / `vault_not_found` | Report and stop. |
 | `404` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | Already exists (DOI import, duplicate relation). Surface the existing resource id. |
-| `410 raw_pdf_upload_removed` | Sent raw PDF bytes to `POST /pdf`. Use the resumable flow instead (`/pdf/session`, direct Drive `PUT`, then `/pdf/complete`); do not retry the same request. |
+| `410 raw_pdf_upload_removed` | Sent raw PDF bytes to `POST /vaults/:vaultId/items/:itemId/pdf`. Use the resumable flow instead (`/vaults/:vaultId/items/:itemId/pdf/session`, direct Drive `PUT`, then `/vaults/:vaultId/items/:itemId/pdf/complete`); do not retry the same request. |
 | `413 request_too_large` | Split batch requests. |
 | `429 rate_limit_exceeded` | Back off using `retry_after_seconds`. |
 | `500 bulk_insert_partial_failure` | Partial write may have occurred. Do not retry without `idempotency_key`. Alert user for manual review. |
@@ -250,7 +250,7 @@ State this clearly if the user requests one; do not improvise an alternative.
 Normal agent runtime is API-key-only:
 
 - Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
-- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Uploading bytes always uses the resumable flow — API-key `POST /pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /pdf/complete` — at any file size; there is no raw-bytes upload path. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
+- Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Uploading bytes always uses the resumable flow — API-key `POST /vaults/:vaultId/items/:itemId/pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /vaults/:vaultId/items/:itemId/pdf/complete` — at any file size; there is no raw-bytes upload path. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 - Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant) also just requires `vaults:write` via API key — it is not a JWT-only route, despite living outside the `/vaults/*` tree. No CLI command wraps it yet; call it directly.
 - Google Drive connect/disconnect, API-key lifecycle, and global audit remain session-JWT/browser account-management flows.
 - Search/list accepts canonical `per_page` and `tag`; backend also accepts compatibility aliases `limit` and `tag_id`. DOI filtering is supported.
