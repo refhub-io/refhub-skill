@@ -30,6 +30,19 @@ Exit codes: `0` success · `1` API error · `2` bad arguments · `3` auth error.
 
 The CLI covers data routes, API-key Semantic Scholar discovery/enrichment, and API-key item-scoped PDF upload. For account setup routes (Google Drive link management, key management) fall back to direct HTTP (base URL: `https://refhub-api.netlify.app/api/v1`).
 
+**If `which refhub` fails**, don't silently fall back to raw HTTP calls — ask the user first, upfront with the setup commands, e.g.:
+
+> The RefHub CLI isn't installed. It's the recommended way to run RefHub workflows — it handles auth, consistent JSON output, and error formatting for you. Want me to set it up now?
+>
+> ```sh
+> npm install -g @refhub/cli
+> export REFHUB_API_KEY=rhk_<publicId>_<secret>   # get one from the RefHub web UI if you don't have one yet
+> ```
+>
+> If you'd rather not, I'll call the API directly for this session instead.
+
+If the user declines (or doesn't respond, or the environment can't run `npm install`), proceed with direct HTTP calls as documented below — don't block the task on CLI setup.
+
 ## Authentication
 
 Two modes — never mix them.

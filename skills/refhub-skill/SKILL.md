@@ -7,6 +7,19 @@ description: Use when an agent needs to interact with RefHub — reading, writin
 
 If the `refhub` CLI is available in the environment (`which refhub` succeeds), use it for **API key (data) routes** — it handles authentication, error formatting, and consistent output.
 
+**If it is not available**, ask the user before falling back to direct HTTP calls — don't silently skip straight to raw API requests. Ask upfront, with the setup commands included:
+
+> The RefHub CLI isn't installed. It's the recommended way to run RefHub workflows — it handles auth, consistent JSON output, and error formatting for you. Want me to set it up now?
+>
+> ```sh
+> npm install -g @refhub/cli
+> export REFHUB_API_KEY=rhk_<publicId>_<secret>   # get one from the RefHub web UI if you don't have one yet
+> ```
+>
+> If you'd rather not, I'll call the API directly for this session instead.
+
+If the user declines (or doesn't respond, or the environment can't run `npm install`), proceed with direct HTTP calls as documented in `docs/` — don't block the task on CLI setup.
+
 **Setup:** The CLI reads `REFHUB_API_KEY` from the environment. A `--api-key` flag overrides it for one-off calls.
 
 **Command reference:** Run `refhub --help` or `refhub <group> --help` (e.g. `refhub vaults --help`) to see available commands and flags.

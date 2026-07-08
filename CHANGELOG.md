@@ -9,6 +9,11 @@ project uses [Semantic Versioning](https://semver.org/). History prior to
 ## [1.1.0] - 2026-07-08
 
 ### Added
+- When the `refhub` CLI isn't found, the skill now asks the user upfront
+  (with the install/setup commands included) whether to set it up,
+  instead of silently falling back to direct API calls. Declining (or
+  not responding) still falls back to direct HTTP calls — this is a
+  nudge, not a hard requirement.
 - Documented `url`/`pdf_url` fields on item add/update, and the full
   bibtex-oriented field set, matching the frontend's publication dialog
   one-for-one.
