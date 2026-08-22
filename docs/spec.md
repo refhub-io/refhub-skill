@@ -202,7 +202,7 @@ Intent: import references prepared elsewhere.
 
 Endpoint: `POST /api/v1/vaults/:vaultId/items`
 
-Accepts one or more items. Each must include `title`. Tag IDs must already exist. Backend prevalidates and attempts rollback on failure. Accepts the full publication field set matching the frontend's publication dialog: `authors`, `year`, `doi`, `url`, `abstract`, `pdf_url` (publisher-hosted PDF link), `notes`, `publication_type`, and the remaining bibtex-oriented fields (`journal`, `volume`, `issue`, `pages`, `booktitle`, `chapter`, `edition`, `editor`, `howpublished`, `institution`, `number`, `organization`, `publisher`, `school`, `series`, `type`, `eid`, `isbn`, `issn`, `keywords`) — verified 2026-07 against the live API.
+Accepts one or more items. Each must include `title`. Tag IDs must already exist. Backend prevalidates and attempts rollback on failure. Accepts the full publication field set matching the frontend's publication dialog: `authors`, `year`, `doi`, `url`, `abstract`, `pdf_url` (publisher-hosted PDF link), `notes`, `reading_state` (`unread`/`skimmed`/`read`, defaults to `unread`), `important` (boolean, defaults to `false`), `publication_type`, and the remaining bibtex-oriented fields (`journal`, `volume`, `issue`, `pages`, `booktitle`, `chapter`, `edition`, `editor`, `howpublished`, `institution`, `number`, `organization`, `publisher`, `school`, `series`, `type`, `eid`, `isbn`, `issn`, `keywords`) — verified 2026-07 against the live API. Like `notes`, `reading_state`/`important` are vault-local per item and never propagate to sibling copies of the same paper in other vaults.
 
 ### 7.9 Update item
 

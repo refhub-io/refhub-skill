@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [Semantic Versioning](https://semver.org/). History prior to
 1.1.0 was not tracked in this file.
 
+## [1.1.1] - 2026-07-21
+
+### Added
+- Documented `reading_state` (`unread`/`skimmed`/`read`, defaults to
+  `unread`) and `important` (boolean, defaults to `false`) as accepted
+  item fields in `docs/spec.md` and `SKILL.md`, matching refhub.io v1.7.0
+  (issue #94) and the `.netlify` v2.5.0 API update. Like `notes`, both are
+  vault-local per item and never propagate to sibling copies of the same
+  paper in other vaults.
+
 ## [1.1.0] - 2026-07-08
 
 ### Added
