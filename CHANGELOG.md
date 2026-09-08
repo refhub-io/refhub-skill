@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [Semantic Versioning](https://semver.org/). History prior to
 1.1.0 was not tracked in this file.
 
+## [1.3.0] - 2026-09-08
+
+### Added
+- Documented curated vault sections (`GET/POST /vaults/:vaultId/sections`, `PATCH/DELETE .../sections/:sectionId`) across `AGENTS.md`, `SKILL.md`, `docs/spec.md`, and `docs/api-mapping.md`, matching `.netlify` v2.7.0 (#196). List is viewer-level; writes require vault **owner** permission specifically, not just editor.
+- Documented `section_id`/`section_position`/`featured`/`featured_note` as accepted fields on `PATCH /vaults/:vaultId/items/:itemId`, and the owner-only access check the backend runs for them separately from the rest of that endpoint.
+- Documented citation-based relationship-suggestion scanning as now supported: `refhub relations scan --vault <id> [--item <id>] [--dry-run] [--limit <n>]` (`refhub-cli` v1.6.0) — pure client-side orchestration on the existing Semantic Scholar and relation endpoints, no dedicated backend route, mirroring `refhub enrich`'s pattern. Only ever proposes `cites` relations.
+
+### Fixed
+- `AGENTS.md`'s Vaults route list was missing `POST /vaults/:vaultId/archive` even though the rest of the file already documented the workflow — added.
+- Corrected `403` error-code documentation in `AGENTS.md` and `SKILL.md`: the real codes are `insufficient_vault_access` and `vault_not_allowed`, not the previously-documented `vault_access_denied` (which doesn't exist); `vault_not_found` is `404`, not `403`.
+
+### Changed
+- Removed relationship-suggestion scanning from every "not yet implemented" / "do not apply" / non-goals list across all four docs — manual relation CRUD was already supported, and the automated scanning step now is too, via the CLI.
+
 ## [1.2.0] - 2026-09-08
 
 ### Added

@@ -10,12 +10,14 @@ Apply whenever the user asks you to:
 - create or configure vaults (name, visibility, collaborators)
 - archive a vault (permanent, read-only lockdown — confirm with the user first; there is no unarchive)
 - manage tags or relations on vault items
+- scan a vault's items for citation-based relationship suggestions (creates `cites` relations only; manual relation types remain manual)
+- curate a vault's sections or featured items for its public Codex page (requires vault owner access, not just editor)
 - sync changes incrementally
 - enrich incomplete publication metadata from Semantic Scholar
 - upload a PDF and store it in the user's linked Google Drive
 - manage API keys or Google Drive settings
 
-Do **not** apply for features with no API route: relationship-suggestion scanning (citation-based candidate matching — manual relation create/update/delete IS supported, see below), item revision history, item move/copy between vaults, webhooks.
+Do **not** apply for features with no API route: item revision history, item move/copy between vaults, webhooks.
 
 ## Execution layer
 
@@ -93,6 +95,7 @@ GET    /vaults/:vaultId                     # read with items/tags/relations (va
 POST   /vaults                              # create (vaults:admin)
 PATCH  /vaults/:vaultId                     # update metadata (vaults:admin + owner)
 DELETE /vaults/:vaultId                     # hard delete — confirm first (vaults:admin + owner)
+POST   /vaults/:vaultId/archive             # permanent, read-only — confirm first, no unarchive (vaults:admin + owner)
 PATCH  /vaults/:vaultId/visibility          # set visibility/slug (vaults:admin + owner)
 GET    /vaults/:vaultId/shares              # list collaborators (vaults:read)
 POST   /vaults/:vaultId/shares              # add collaborator — email required, role: viewer|editor (vaults:admin)
@@ -124,6 +127,7 @@ Notes:
 - Bulk upsert matches on DOI first, then `bibtex_key`; items with neither are always created
 - Pass `idempotency_key` on bulk upsert for safe retries (TTL: 5 minutes)
 - Item delete removes the `vault_publications` row; the underlying `publications` row is preserved
+- `section_id`, `section_position`, `featured`, `featured_note` on item update are vault-local curation fields (grouping/highlighting for the public Codex page) and require **vault owner** access — an editor-scoped key gets `403 insufficient_vault_access` for these specific fields even though it can update every other item field. CLI: `refhub items update <itemId> --vault <id> [--section <sectionId> | --unset-section] [--featured | --unfeature] [--featured-note <text>]`
 
 ### Import
 
@@ -149,6 +153,23 @@ POST   /vaults/:vaultId/tags/attach         # attach { item_id, tag_ids } — id
 POST   /vaults/:vaultId/tags/detach         # detach { item_id, tag_ids } — ignores unattached (vaults:write)
 ```
 
+Tags don't power the public Codex discovery surface directly — Codex topic/tag pages derive their topics from tag names, keywords, and notes at read time; there is no separate "curated tag" resource. Section/featured curation (below) is the mechanism for controlling what a vault's public page highlights.
+
+### Sections
+
+Curated sections group a vault's items for display on its public Codex page. List needs only viewer access; writes require **vault owner** access — an editor share cannot manage sections even with `vaults:admin` on its key.
+
+```
+GET    /vaults/:vaultId/sections               # list (vaults:read)
+POST   /vaults/:vaultId/sections               # create { name, description?, position? } (vaults:admin + owner)
+PATCH  /vaults/:vaultId/sections/:sectionId    # update any subset of { name, description, position } (vaults:admin + owner)
+DELETE /vaults/:vaultId/sections/:sectionId    # delete (vaults:admin + owner)
+```
+
+- `name` required (non-empty) on create
+- deleting a section unfiles its items (`vault_publications.section_id` set to `null`) rather than deleting them
+- CLI: `refhub sections list|create|update|delete --vault <id> ...`
+
 ### Relations
 
 ```
@@ -157,6 +178,8 @@ POST   /vaults/:vaultId/relations           # create — not idempotent, check b
 PATCH  /vaults/:vaultId/relations/:id       # update relation_type only (vaults:write)
 DELETE /vaults/:vaultId/relations/:id       # delete (vaults:write)
 ```
+
+Citation-based relationship-suggestion scanning has no dedicated backend route, but is supported via the CLI as pure client-side orchestration on the existing discovery/relation endpoints: `refhub relations scan --vault <id> [--item <itemId>] [--dry-run] [--limit <n>]`. For each item with a DOI, it looks up Semantic Scholar references/citations and matches them against sibling vault items (DOI match, falling back to exact title match), creating a `cites` relation for each new match — it never proposes `extends`/`contradicts`/`related`/etc., those stay manual via relation create/update. Recommend `--dry-run` first on a vault the user hasn't scanned before.
 
 Notes:
 - `publication_id` and `related_publication_id` are the item's `id` field (the `vault_publications` row id), **not** `original_publication_id`
@@ -222,7 +245,9 @@ GET    /audit?since=&until=&per_page=&page=            # global (JWT only)
 | `401 missing_api_key` / `invalid_api_key_format` / `expired` / `revoked` | Stop. Report clearly. Ask user for a valid key. Do not retry with same key. |
 | `401 refhub_api_key_not_supported` | API key sent to a JWT-only route. Switch auth mode or stop. |
 | `403 missing_scope` | Report which scope is needed. Do not attempt a workaround. |
-| `403 vault_access_denied` / `vault_not_found` | Report and stop. |
+| `403 insufficient_vault_access` | Key's permission on this vault is below what the operation needs (e.g. editor trying an owner-only operation like sections or `items update`'s section/featured fields). Report and stop — do not retry with the same key. |
+| `403 vault_not_allowed` | Key is vault-restricted and this vault isn't in its allowed set. Report and stop; do not try a different vault silently. |
+| `404 vault_not_found` | Vault doesn't exist or isn't visible to this key. Verify the id. |
 | `404` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | Already exists (DOI import, duplicate relation). Surface the existing resource id. |
 | `409 vault_archived` | Target vault is archived (`editor`/`owner`-level operation attempted). Report this and stop — do not retry, do not attempt a workaround. Reads are unaffected; only writes are rejected. |
@@ -239,7 +264,6 @@ Every error response includes `error.code`, `error.message`, and `meta.request_i
 Do not attempt these — the current public API does not support them:
 
 - Vault soft-delete or restore (vault archiving IS supported — see above; there is deliberately no unarchive/restore path, by design, not as a temporary gap)
-- Relationship-suggestion scanning (the citation-matching workflow that surfaces candidate relationships — manual relation create/update/delete IS supported)
 - Item revision history or restore
 - Item move or copy between vaults
 - Webhooks or event subscriptions

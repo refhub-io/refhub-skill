@@ -43,6 +43,8 @@ Agent-facing runtime skill for the RefHub public API (v2). Covers the full API s
 - creating or configuring vaults (name, visibility, collaborators)
 - archiving a vault (permanent, read-only lockdown — confirm with the user first)
 - managing tags or relations on vault items
+- scanning a vault's items for citation-based relationship suggestions (creates `cites` relations only)
+- curating a vault's sections or featured items for its public Codex page (requires vault owner access)
 - exporting a vault or syncing changes incrementally
 - enriching incomplete publication metadata using Semantic Scholar (doi-metadata)
 - uploading a PDF and storing it in the user's linked Google Drive
@@ -51,7 +53,7 @@ Agent-facing runtime skill for the RefHub public API (v2). Covers the full API s
 
 ## Do NOT use this skill when
 
-- the user asks to use a frontend-only feature with no public API route (e.g. relationship-suggestion scanning, item revision history — manual relation create/update/delete IS supported)
+- the user asks to use a frontend-only feature with no public API route (e.g. item revision history, item move/copy between vaults)
 - no credentials are available — stop and ask for an API key and/or session JWT before proceeding
 
 ---
@@ -181,6 +183,7 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 3. `version` increments automatically on metadata updates
 4. CLI: when using `refhub items update --tags`, a warning is emitted to stderr confirming the full-replacement behaviour before the request is sent
 5. CLI: `refhub items update <itemId> --vault <id> [--title <t>] [--authors ...] [--year <n>] [--doi <doi>] [--url <url>] [--pdf-url <url>] [--tags <id,id>] [--notes <text>]`
+6. `section_id`, `section_position`, `featured`, `featured_note` are also accepted here — vault-local curation fields for the public Codex page (see Sections below). Setting any of them requires **vault owner** access, not just editor: `403 insufficient_vault_access` with the message "Only the vault owner can change section/featured state" if the key's permission is editor-level, even though the same key can update every other item field on the same request. CLI: `refhub items update <itemId> --vault <id> [--section <sectionId> | --unset-section] [--featured | --unfeature] [--featured-note <text>]`
 
 **Delete item** — `vaults:write` + editor
 1. **Warn the user — hard delete, no undo**
@@ -285,6 +288,20 @@ All tag writes require `vaults:write` + editor. Reads require `vaults:read`.
 5. Attach: `POST /vaults/:vaultId/tags/attach` with `{ item_id, tag_ids: [] }` — idempotent
 6. Detach: `POST /vaults/:vaultId/tags/detach` with `{ item_id, tag_ids: [] }` — silently ignores unattached ids
 
+Tags don't power public Codex discovery directly — Codex topic pages derive their topics from tag names, keywords, and notes at read time; there's no separate "curated tag" resource. Section/featured curation (below) controls what a vault's public page highlights.
+
+---
+
+### Sections
+
+Curated sections group a vault's items for display on its public Codex page. Listing requires only `vaults:read` + viewer. Writes require `vaults:admin` **and vault owner** — an editor share cannot manage sections even with `vaults:admin` on its key.
+
+1. List: `GET /vaults/:vaultId/sections`
+2. Create: `POST /vaults/:vaultId/sections` with `{ name, description?, position? }` — `name` required, non-empty; `position` defaults to `0` if omitted
+3. Update: `PATCH /vaults/:vaultId/sections/:sectionId` with any subset of `{ name, description, position }` — `404 section_not_found` if the section doesn't exist in this vault
+4. Delete: `DELETE /vaults/:vaultId/sections/:sectionId` → `200 { data: { id } }` — unfiles the section's items (`section_id` set to `null`) rather than deleting them
+5. CLI: `refhub sections list|create|update|delete --vault <id> ...`
+
 ---
 
 ### Relations
@@ -298,6 +315,14 @@ All relation writes require `vaults:write` + editor. Reads require `vaults:read`
 4. Delete: `DELETE /vaults/:vaultId/relations/:relationId` → `200 { data: { id } }`
 
 Supported relation types: `cites`, `extends`, `builds_on`, `contradicts`, `reviews`, `related`.
+
+**Scan for citation-based relationship suggestions** — no dedicated backend route; pure client-side orchestration on the existing Semantic Scholar and relation endpoints, mirroring the enrichment workflow's pattern.
+1. For each vault item with a DOI, look up its Semantic Scholar paper id (`POST /semantic-scholar/lookup`), then fetch its references and citations
+2. Match each returned paper against sibling items already in the vault — DOI match first, falling back to an exact, case-insensitive title match — mirroring the RefHub frontend's own relationship-suggestion matching
+3. Create a `cites` relation for every new match: item → reference (this item cites the matched paper), and matched paper → item (for a citation match, since the matched paper is what cites this item)
+4. Skip any pair that already has a relation between them — never create a duplicate
+5. Only ever proposes `relation_type: "cites"` — there's no basis in citation-graph data alone for `extends`/`contradicts`/etc.; those stay manual via relation create/update
+6. CLI: `refhub relations scan --vault <id> [--item <itemId>] [--dry-run] [--limit <n>]` — recommend `--dry-run` first on a vault the user hasn't scanned before, since a whole-vault scan can create many relations in one run
 
 ---
 
@@ -345,8 +370,9 @@ Requires any valid API key (data route for vault-scoped; JWT for global).
 | `401` | `missing_api_key`, `invalid_api_key_format`, `expired_api_key`, `revoked_api_key` | Stop. Report clearly. Do not retry with the same key. Ask user to provide a valid key. |
 | `401` | `refhub_api_key_not_supported` | API key sent to a JWT-only route. Switch auth mode or stop. |
 | `403` | `missing_scope` | Key lacks required scope. Report which scope is needed. Do not attempt workaround. |
-| `403` | `vault_access_denied`, `vault_not_found` | No access to this vault with this key. Report and stop. |
-| `404` | `item_not_found`, `tag_not_found`, `relation_not_found` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
+| `403` | `insufficient_vault_access` | Key's permission on this vault is below what the operation needs (e.g. editor trying an owner-only operation like sections or `items update`'s section/featured fields). Report and stop; do not retry with the same key. |
+| `403` | `vault_not_allowed` | Key is vault-restricted and this vault isn't in its allowed set. Report and stop; do not try a different vault silently. |
+| `404` | `vault_not_found`, `item_not_found`, `tag_not_found`, `relation_not_found`, `section_not_found` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | (DOI import, duplicate relation) | Resource already exists. Surface the existing item id to the user. |
 | `409` | `vault_archived` | Target vault is archived; the attempted operation is `editor`/`owner`-level. Report and stop — do not retry, do not attempt a workaround. Reads are unaffected. |
 | `410` | `raw_pdf_upload_removed` | Sent raw PDF bytes to `POST /vaults/:vaultId/items/:itemId/pdf` — that route only accepts JSON `{ source_url }`. Switch to the resumable flow (`/vaults/:vaultId/items/:itemId/pdf/session` -> direct Drive `PUT` -> `/vaults/:vaultId/items/:itemId/pdf/complete`) instead; do not retry the same request. |
@@ -371,6 +397,8 @@ Every error response includes `error.code`, `error.message`, and `meta.request_i
 - **Never proceed with vault archiving without explicit user confirmation.** Permanent, no unarchive route, and it freezes items/tags/relations/shares read-only — not just the vault's own metadata.
 - **Never send `visibility` or `public_slug` in `PATCH /vaults/:vaultId`.** Use the dedicated visibility endpoint.
 - **`tag_ids` on item update is a full replacement, not an append.** Make this explicit to the user before patching.
+- **Never retry a section/featured write or a sections command with the same non-owner key.** These require vault owner access; an editor-level `403 insufficient_vault_access` means switch keys or ask the user, not retry.
+- **`relations scan` can create many relations in one run.** Recommend `--dry-run` first on a vault the user hasn't scanned before, and only ever treat its output as `cites` suggestions — never as a substitute for `relations create` when the user means a different relation type.
 
 ---
 
@@ -379,7 +407,6 @@ Every error response includes `error.code`, `error.message`, and `meta.request_i
 The following have no API route and cannot be performed through this skill:
 
 - Vault soft-delete or restore (vault archiving IS supported — see Vaults above; there is deliberately no unarchive/restore path, by design, not a temporary gap)
-- Relationship-suggestion scanning — the citation-matching workflow that surfaces candidate relationships is frontend-only; manual relation create/update/delete IS supported
 - Item revision history or restore
 - Item move or copy between vaults
 - Webhooks or event subscriptions
@@ -401,7 +428,7 @@ If a user requests one of these, state clearly that the feature is not yet avail
 
 Normal agent runtime is API-key-only:
 
-- Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
+- Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...`, `refhub enrich --vault <id> [--item <id>] [--dry-run]`, and `refhub relations scan --vault <id> [--item <id>] [--dry-run] [--limit <n>]` — the latter two are pure client-side orchestration on these routes, no dedicated backend route of their own.
 - Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. Uploading bytes always uses the resumable flow — API-key `POST /vaults/:vaultId/items/:itemId/pdf/session`, direct Drive `PUT` to `upload_url`, then `POST /vaults/:vaultId/items/:itemId/pdf/complete` — at any file size; there is no raw-bytes upload path. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 - Publication-level PDF upload (`POST /publications/:publicationId/pdf/session` + `/complete`, same resumable-only flow, no raw-bytes variant) also just requires `vaults:write` via API key — not a JWT-only route, despite living outside `/vaults/*`. No CLI command wraps it yet.
 - Google Drive connect/disconnect, API-key lifecycle, and global audit remain session-JWT/browser account-management flows.
