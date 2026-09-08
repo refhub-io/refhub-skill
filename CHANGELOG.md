@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [Semantic Versioning](https://semver.org/). History prior to
 1.1.0 was not tracked in this file.
 
+## [1.2.0] - 2026-09-08
+
+### Added
+- Documented vault archiving (`POST /vaults/:vaultId/archive`, `vaults:admin` + owner) across `AGENTS.md`, `SKILL.md`, `docs/spec.md`, and `docs/api-mapping.md`, matching refhub.io #152 and `.netlify` v2.6.0. Includes the `409 vault_archived` error code and the `archived_at` vault field.
+
+### Changed
+- Corrected every prior "vault archiving has no API route" claim — it now does. Unarchiving remains explicitly documented as never supported, by design (not a deferred gap).
+- Added relationship-suggestion scanning (the frontend's citation-matching workflow) to the not-yet-implemented lists that previously only mentioned vault archiving — manual relation CRUD was already, and remains, fully supported.
+
 ## [1.1.1] - 2026-07-21
 
 ### Added

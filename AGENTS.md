@@ -8,13 +8,14 @@ Apply whenever the user asks you to:
 - read, search, or export vault contents
 - add, update, delete, or import references
 - create or configure vaults (name, visibility, collaborators)
+- archive a vault (permanent, read-only lockdown — confirm with the user first; there is no unarchive)
 - manage tags or relations on vault items
 - sync changes incrementally
 - enrich incomplete publication metadata from Semantic Scholar
 - upload a PDF and store it in the user's linked Google Drive
 - manage API keys or Google Drive settings
 
-Do **not** apply for features with no API route: vault archiving, item revision history, item move/copy between vaults, webhooks.
+Do **not** apply for features with no API route: relationship-suggestion scanning (citation-based candidate matching — manual relation create/update/delete IS supported, see below), item revision history, item move/copy between vaults, webhooks.
 
 ## Execution layer
 
@@ -224,6 +225,7 @@ GET    /audit?since=&until=&per_page=&page=            # global (JWT only)
 | `403 vault_access_denied` / `vault_not_found` | Report and stop. |
 | `404` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | Already exists (DOI import, duplicate relation). Surface the existing resource id. |
+| `409 vault_archived` | Target vault is archived (`editor`/`owner`-level operation attempted). Report this and stop — do not retry, do not attempt a workaround. Reads are unaffected; only writes are rejected. |
 | `410 raw_pdf_upload_removed` | Sent raw PDF bytes to `POST /vaults/:vaultId/items/:itemId/pdf`. Use the resumable flow instead (`/vaults/:vaultId/items/:itemId/pdf/session`, direct Drive `PUT`, then `/vaults/:vaultId/items/:itemId/pdf/complete`); do not retry the same request. |
 | `413 request_too_large` | Split batch requests. |
 | `429 rate_limit_exceeded` | Back off using `retry_after_seconds`. |
@@ -236,7 +238,8 @@ Every error response includes `error.code`, `error.message`, and `meta.request_i
 
 Do not attempt these — the current public API does not support them:
 
-- Vault archiving, soft-delete, or restore
+- Vault soft-delete or restore (vault archiving IS supported — see above; there is deliberately no unarchive/restore path, by design, not as a temporary gap)
+- Relationship-suggestion scanning (the citation-matching workflow that surfaces candidate relationships — manual relation create/update/delete IS supported)
 - Item revision history or restore
 - Item move or copy between vaults
 - Webhooks or event subscriptions

@@ -24,6 +24,7 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 - `GET    /api/v1/vaults/:vaultId`
 - `PATCH  /api/v1/vaults/:vaultId`
 - `DELETE /api/v1/vaults/:vaultId`
+- `POST   /api/v1/vaults/:vaultId/archive`
 - `PATCH  /api/v1/vaults/:vaultId/visibility`
 - `GET    /api/v1/vaults/:vaultId/shares`
 - `POST   /api/v1/vaults/:vaultId/shares`
@@ -125,8 +126,9 @@ The CLI always uses the API-key `/session` + `/complete` routes, at any file siz
 
 | Desired workflow | Status | Notes |
 | --- | --- | --- |
-| Vault archiving / unarchiving | not implemented | No API route; deferred |
+| Vault unarchiving | never — by design | Not deferred; irreversibility is enforced by a DB trigger, not an app-level policy. Archiving itself IS implemented: `POST /vaults/:vaultId/archive` |
 | Vault duplication / clone | not implemented | No API route; deferred |
+| Relationship-suggestion scanning | not implemented | Citation-matching workflow is frontend-only; manual relation CRUD IS implemented |
 | Item soft-delete / restore | not implemented | Hard delete only |
 | Item revision history | not implemented | No history table in current schema |
 | Item move/copy between vaults | not implemented | No API route |
@@ -202,7 +204,7 @@ The skill covers the full current public API surface. Future expansion should fo
 
 `API route exists → update skill → update CLI/MCP`
 
-Deferred features (archiving, webhooks, revision history) should not be approximated via existing endpoints.
+Deferred features (vault duplication, webhooks, revision history) should not be approximated via existing endpoints. Vault unarchiving is not deferred — it will never exist.
 
 
 ## API-key Semantic Scholar and PDF workflows (2026-06)

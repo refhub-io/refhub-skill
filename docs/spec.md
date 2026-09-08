@@ -63,8 +63,9 @@ No placeholder commands, no fake tool handlers, no pretend offline sync layer.
 
 - `vault`
   - collection boundary for references and collaboration
-  - key fields: `id`, `name`, `description`, `color`, `visibility`, `category`, `abstract`, `updated_at`
+  - key fields: `id`, `name`, `description`, `color`, `visibility`, `category`, `abstract`, `updated_at`, `archived_at`
   - visibility values: `private`, `protected`, `public`
+  - `archived_at`: `null` unless permanently archived; once set, every `editor`/`owner`-level write against the vault is rejected. No unarchive path exists
 - `vault item`
   - agent-facing term for a `vault_publications` row
   - carries title, authors, year, DOI, URL, abstract, notes, BibTeX-oriented metadata, version
@@ -101,7 +102,7 @@ The skill supports all workflows already backed by the current public API:
 
 1. Discover accessible vaults.
 2. Read one vault with its full contents.
-3. Create, update metadata, and delete vaults.
+3. Create, update metadata, delete, and permanently archive vaults (archiving has no unarchive path — confirm with the user first).
 4. Set vault visibility and manage collaborators.
 5. Add one or more items to a vault.
 6. Update one existing vault item.
@@ -126,8 +127,10 @@ The skill supports all workflows already backed by the current public API:
 
 Do not include these unless the API lands first:
 
-- vault archiving, unarchiving, or soft-delete
+- vault unarchiving (permanent by design, not deferred — vault archiving itself IS supported)
+- vault soft-delete
 - vault duplication or clone
+- relationship-suggestion scanning (citation-matching workflow; manual relation CRUD IS supported)
 - item restore after deletion
 - item revision history
 - item move/copy between vaults
@@ -458,13 +461,14 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 - Do not silently re-run bulk writes after ambiguous failure.
 - Prefer idempotent read flows and explicit write confirmations.
 - Vault and item deletes are permanent — warn before proceeding.
+- Vault archiving is permanent — warn before proceeding. There is no unarchive.
 
 ## 12. What exists now vs what is deferred
 
 ### Exists now (public API)
 
 - API key management routes
-- vault list / read / create / update / delete / visibility / shares
+- vault list / read / create / update / delete / archive / visibility / shares
 - item add / update / delete / upsert / import-preview
 - DOI, BibTeX, and URL import
 - tag CRUD + attach/detach
@@ -478,11 +482,17 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 
 ### Deferred
 
-- vault archiving and soft-delete
+- vault duplication/clone
+- vault soft-delete
+- relationship-suggestion scanning (manual relation CRUD exists now)
 - item revision history and restore
 - item move/copy between vaults
 - webhooks and event delivery
 - audit log viewer in the frontend
+
+### Never (not deferred — permanent by design)
+
+- vault unarchiving, under any name
 
 ## 13. Acceptance criteria
 
