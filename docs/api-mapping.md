@@ -126,7 +126,7 @@ The CLI always uses the API-key `/session` + `/complete` routes, at any file siz
 
 | Desired workflow | Status | Notes |
 | --- | --- | --- |
-| Vault unarchiving | never — by design | Not deferred; irreversibility is enforced by a DB trigger, not an app-level policy. Archiving itself IS implemented: `POST /vaults/:vaultId/archive` |
+| Vault unarchiving | never — by design | Not deferred; irreversibility is enforced server-side (not an app-level policy). Archiving itself IS implemented: `POST /api/v1/vaults/:vaultId/archive` |
 | Vault duplication / clone | not implemented | No API route; deferred |
 | Relationship-suggestion scanning | not implemented | Citation-matching workflow is frontend-only; manual relation CRUD IS implemented |
 | Item soft-delete / restore | not implemented | Hard delete only |
