@@ -24,6 +24,7 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 - `GET    /api/v1/vaults/:vaultId`
 - `PATCH  /api/v1/vaults/:vaultId`
 - `DELETE /api/v1/vaults/:vaultId`
+- `POST   /api/v1/vaults/:vaultId/archive`
 - `PATCH  /api/v1/vaults/:vaultId/visibility`
 - `GET    /api/v1/vaults/:vaultId/shares`
 - `POST   /api/v1/vaults/:vaultId/shares`
@@ -33,7 +34,7 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 **Items**
 - `GET    /api/v1/vaults/:vaultId/items`                    search/filter
 - `POST   /api/v1/vaults/:vaultId/items`                    add items (legacy bulk add)
-- `PATCH  /api/v1/vaults/:vaultId/items/:itemId`            update item
+- `PATCH  /api/v1/vaults/:vaultId/items/:itemId`            update item; `section_id`/`section_position`/`featured`/`featured_note` require vault owner permission specifically (see §5)
 - `DELETE /api/v1/vaults/:vaultId/items/:itemId`            delete item (hard)
 - `POST   /api/v1/vaults/:vaultId/items/upsert`             bulk upsert by DOI / title+year
 - `POST   /api/v1/vaults/:vaultId/items/import-preview`     dry-run upsert
@@ -45,6 +46,12 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 - `DELETE /api/v1/vaults/:vaultId/tags/:tagId`
 - `POST   /api/v1/vaults/:vaultId/tags/attach`
 - `POST   /api/v1/vaults/:vaultId/tags/detach`
+
+**Sections**
+- `GET    /api/v1/vaults/:vaultId/sections`
+- `POST   /api/v1/vaults/:vaultId/sections`                 owner-only, despite `vaults:admin` scope covering most other admin ops
+- `PATCH  /api/v1/vaults/:vaultId/sections/:sectionId`      owner-only
+- `DELETE /api/v1/vaults/:vaultId/sections/:sectionId`      owner-only
 
 **Relations**
 - `GET    /api/v1/vaults/:vaultId/relations`
@@ -106,6 +113,12 @@ The CLI always uses the API-key `/session` + `/complete` routes, at any file siz
 | Create relation | `POST /api/v1/vaults/:vaultId/relations` | `vaults:write` | editor |
 | Update relation type | `PATCH /api/v1/vaults/:vaultId/relations/:relationId` | `vaults:write` | editor |
 | Delete relation | `DELETE /api/v1/vaults/:vaultId/relations/:relationId` | `vaults:write` | editor |
+| Scan for citation-based relationship suggestions | `POST /api/v1/semantic-scholar/lookup`+`/references`+`/citations` then `POST /api/v1/vaults/:vaultId/relations` (client-side orchestration, no dedicated route) | `vaults:read` + `vaults:write` | editor |
+| List sections | `GET /api/v1/vaults/:vaultId/sections` | `vaults:read` | viewer |
+| Create section | `POST /api/v1/vaults/:vaultId/sections` | `vaults:admin` | owner |
+| Update section | `PATCH /api/v1/vaults/:vaultId/sections/:sectionId` | `vaults:admin` | owner |
+| Delete section | `DELETE /api/v1/vaults/:vaultId/sections/:sectionId` | `vaults:admin` | owner |
+| Set item section/featured state | `PATCH /api/v1/vaults/:vaultId/items/:itemId` (`section_id`/`section_position`/`featured`/`featured_note`) | `vaults:write` | owner (not editor, unlike the rest of this endpoint) |
 | Import from DOI | `POST /api/v1/vaults/:vaultId/import/doi` | `vaults:write` | editor |
 | Import from BibTeX | `POST /api/v1/vaults/:vaultId/import/bibtex` | `vaults:write` | editor |
 | Import from URL | `POST /api/v1/vaults/:vaultId/import/url` | `vaults:write` | editor |
@@ -125,7 +138,7 @@ The CLI always uses the API-key `/session` + `/complete` routes, at any file siz
 
 | Desired workflow | Status | Notes |
 | --- | --- | --- |
-| Vault archiving / unarchiving | not implemented | No API route; deferred |
+| Vault unarchiving | never — by design | Not deferred; irreversibility is enforced server-side (not an app-level policy). Archiving itself IS implemented: `POST /api/v1/vaults/:vaultId/archive` |
 | Vault duplication / clone | not implemented | No API route; deferred |
 | Item soft-delete / restore | not implemented | Hard delete only |
 | Item revision history | not implemented | No history table in current schema |
@@ -162,6 +175,9 @@ Current scopes:
 | `tags.attach` / `detach` | `vaults:write` |
 | `relations.list` | `vaults:read` |
 | `relations.create` / `update` / `delete` | `vaults:write` |
+| `relations.scanSuggestions` | `vaults:read` + `vaults:write` |
+| `sections.list` | `vaults:read` |
+| `sections.create` / `update` / `delete` | `vaults:admin` (+ vault owner) |
 | `import.doi` / `bibtex` / `url` | `vaults:write` |
 | `vaults.stats` / `changes` / `search` | `vaults:read` |
 | `vaults.export` | `vaults:export` |
@@ -187,6 +203,9 @@ Current scopes:
 - All delete operations return `200 { data: { id } }` — not `204 No Content`.
 - Relation creation is not idempotent — submitting a duplicate pair will produce an error; check before creating.
 - Relations list only supports `?type=` filter — `source_id` and `target_id` filters are not implemented.
+- Relationship-suggestion scanning only ever creates `relation_type: "cites"` — citation-graph data alone gives no basis for `extends`/`contradicts`/etc.
+- Section and item-featured writes require vault **owner** permission, not just editor — this is stricter than every other `vaults:write`/`vaults:admin` operation on the same endpoints, which check editor or owner respectively. `PATCH /vaults/:vaultId/items/:itemId` specifically runs a second, owner-level access check only when the body includes `section_id`/`section_position`/`featured`/`featured_note`.
+- Deleting a section unfiles its items (`section_id` → `null`) rather than deleting them.
 - DOI import calls Semantic Scholar internally; it will fail if `SEMANTIC_SCHOLAR_API_KEY` is not configured.
 - Agent Semantic Scholar routes live under `/semantic-scholar/*` and accept API keys with `vaults:read`; legacy root routes remain JWT-only for frontend compatibility.
 - Semantic Scholar rate limit: 1 request per second. The enrichment workflow must sleep between calls when processing multiple items.
@@ -202,14 +221,14 @@ The skill covers the full current public API surface. Future expansion should fo
 
 `API route exists → update skill → update CLI/MCP`
 
-Deferred features (archiving, webhooks, revision history) should not be approximated via existing endpoints.
+Deferred features (vault duplication, webhooks, revision history) should not be approximated via existing endpoints. Vault unarchiving is not deferred — it will never exist.
 
 
 ## API-key Semantic Scholar and PDF workflows (2026-06)
 
 Normal agent runtime is API-key-only:
 
-- Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...` and `refhub enrich --vault <id> [--item <id>] [--dry-run]`.
+- Semantic Scholar: `POST /api/v1/semantic-scholar/lookup`, `/doi-metadata`, `/search`, `/recommendations`, `/related`, `/references`, `/citations`, `/cited-by`; all require `vaults:read`. CLI: `refhub discover ...`, `refhub enrich --vault <id> [--item <id>] [--dry-run]`, and `refhub relations scan --vault <id> [--item <id>] [--dry-run] [--limit <n>]` (the latter two are client-side orchestration on these routes, no dedicated backend route of their own).
 - Item PDF upload requires `vaults:write` and a Google Drive account already linked in the RefHub web UI. CLI: `refhub pdf upload --vault <vaultId> --item <itemId> --file <path.pdf>`.
 - All API-key item PDF uploads use the resumable flow: `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/session`, direct `PUT` of the PDF bytes to the returned Google Drive `upload_url`, then `POST /api/v1/vaults/:vaultId/items/:itemId/pdf/complete` — at any file size. `POST /api/v1/vaults/:vaultId/items/:itemId/pdf` itself only accepts a JSON `{ source_url }` body now; raw `application/pdf` bytes there return `410 raw_pdf_upload_removed`.
 - Browser/session JWT item PDF routes live under `/api/v1/google-drive/vaults/:vaultId/items/:itemId/pdf`, `/session`, and `/complete`. API-key agents must not call those `/google-drive/...` routes.

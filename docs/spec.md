@@ -63,13 +63,17 @@ No placeholder commands, no fake tool handlers, no pretend offline sync layer.
 
 - `vault`
   - collection boundary for references and collaboration
-  - key fields: `id`, `name`, `description`, `color`, `visibility`, `category`, `abstract`, `updated_at`
+  - key fields: `id`, `name`, `description`, `color`, `visibility`, `category`, `abstract`, `updated_at`, `archived_at`
   - visibility values: `private`, `protected`, `public`
+  - `archived_at`: `null` unless permanently archived; once set, every `editor`/`owner`-level write against the vault is rejected. No unarchive path exists
 - `vault item`
   - agent-facing term for a `vault_publications` row
   - carries title, authors, year, DOI, URL, abstract, notes, BibTeX-oriented metadata, version
+  - also carries `section_id`, `section_position`, `featured`, `featured_note` — vault-local curation fields for the public Codex page; setting any of them requires vault owner permission, not just editor
 - `canonical publication`
   - underlying `publications` row created alongside a vault item; shared across vaults
+- `section`
+  - vault-scoped grouping of items for display on the public Codex page; `name`, `description`, `position`; owner-only writes
 - `tag`
   - vault-scoped, supports `name`, `color`, optional `parent_id` for hierarchy
 - `publication tag`
@@ -101,7 +105,7 @@ The skill supports all workflows already backed by the current public API:
 
 1. Discover accessible vaults.
 2. Read one vault with its full contents.
-3. Create, update metadata, and delete vaults.
+3. Create, update metadata, delete, and permanently archive vaults (archiving has no unarchive path — confirm with the user first).
 4. Set vault visibility and manage collaborators.
 5. Add one or more items to a vault.
 6. Update one existing vault item.
@@ -121,12 +125,16 @@ The skill supports all workflows already backed by the current public API:
 20. Enrich incomplete vault items by fetching full metadata from Semantic Scholar (requires API key with `vaults:read`; patching requires `vaults:write`).
 21. Upload PDFs to the user's linked Google Drive and link them to a vault item using the API-key resumable flow (`/pdf/session`, direct Drive `PUT`, then `/pdf/complete`), at any file size — there is no raw-bytes upload path.
 22. Look up Semantic Scholar paper IDs and fetch recommendations, references, and citations for a paper.
+23. List, create, update, and delete curated vault sections (owner-only writes).
+24. Set an item's section and featured/highlighted state on a vault's public Codex page (owner-only, even when the key's general vault permission is editor).
+25. Scan a vault's items for citation-based relationship suggestions and create `cites` relations from the matches (client-side orchestration on the Semantic Scholar and relation endpoints — no dedicated route).
 
 ## 6. Non-goals
 
 Do not include these unless the API lands first:
 
-- vault archiving, unarchiving, or soft-delete
+- vault unarchiving (permanent by design, not deferred — vault archiving itself IS supported)
+- vault soft-delete
 - vault duplication or clone
 - item restore after deletion
 - item revision history
@@ -211,6 +219,8 @@ Intent: revise notes, metadata, or tags on an existing reference.
 Endpoint: `PATCH /api/v1/vaults/:vaultId/items/:itemId`
 
 Partial update. Accepts the same field set as add items (7.8). If `tag_ids` is present, it replaces the full tag set. Increments `version` on successful metadata updates.
+
+Also accepts `section_id`, `section_position`, `featured`, `featured_note` (see §7.28) — these require vault **owner** permission specifically, checked separately from the `editor`-level check for every other field on this same endpoint. A non-owner editor key gets `403 insufficient_vault_access` for these fields alone.
 
 Skill expectation: make tag replacement semantics explicit; distinguish `item not found` from `permission denied`.
 
@@ -394,6 +404,30 @@ Even holding a Drive URL, it is a Google Drive **view** link (`https://drive.goo
 
 Skill expectation: check `pdf_url` first and fetch it as a normal web resource for read/summarize requests. If only a Drive upload exists (no `pdf_url`), tell the user the file's *link* is available (`drive_pdf_url`) but its *contents* cannot currently be re-fetched via the public API — do not invent a Drive `alt=media` request, since that needs credentials this skill does not have.
 
+### 7.28 Section CRUD
+
+Intent: group a vault's items for display on its public Codex page.
+
+Endpoints: `GET/POST /api/v1/vaults/:vaultId/sections`, `PATCH/DELETE /api/v1/vaults/:vaultId/sections/:sectionId`
+
+List requires `vaults:read` + viewer. All writes require `vaults:admin` **and vault owner permission** — an editor share cannot manage sections even with an `vaults:admin`-scoped key, unlike most other `vaults:admin` operations which check ownership the same way. Create body: `{ name, description?, position? }` — `name` required, non-empty; `position` defaults to `0`. Update accepts any subset of `{ name, description, position }`; returns `404 section_not_found` if the section doesn't belong to this vault. Delete unfiles the section's items (`vault_publications.section_id` set to `null`) rather than deleting them, and returns `200 { data: { id } }`.
+
+### 7.29 Scan for citation-based relationship suggestions
+
+Intent: surface candidate relations between a vault's items from citation-graph data, without manual paper-by-paper lookup.
+
+No dedicated endpoint — client-side orchestration on top of the Semantic Scholar lookup/references/citations routes (§7.26) and relation create (§7.18), the same pattern as enrichment (§7.24).
+
+Workflow:
+1. For each vault item with a DOI, `POST /semantic-scholar/lookup` to get its Semantic Scholar paper id
+2. `POST /semantic-scholar/references` and `POST /semantic-scholar/citations` for that paper id
+3. Match each returned paper against sibling items already in the vault: DOI match first, falling back to an exact, case-insensitive title match (mirrors the RefHub frontend's own relationship-suggestion matching)
+4. For every new match, `POST /vaults/:vaultId/relations` with `relation_type: "cites"` — item → reference for a references match, matched paper → item for a citations match
+5. Skip any pair that already has a relation between them (list relations first, or reuse a whole-vault read's `relations` array)
+6. Rate-limit against Semantic Scholar the same way as enrichment
+
+Skill expectation: support dry-run mode (report what would be created without writing). Only ever propose `relation_type: "cites"` — there is no basis in citation-graph data alone for `extends`/`contradicts`/etc.; those remain manual. CLI: `refhub relations scan --vault <id> [--item <id>] [--dry-run] [--limit <n>]`.
+
 ## 8. Failure behavior
 
 The skill should normalize failures into a predictable structure.
@@ -441,6 +475,8 @@ Conceptual operations:
 - `import.doi` / `import.bibtex` / `import.url`
 - `tags.list` / `tags.create` / `tags.update` / `tags.delete` / `tags.attach` / `tags.detach`
 - `relations.list` / `relations.create` / `relations.update` / `relations.delete`
+- `relations.scanSuggestions`
+- `sections.list` / `sections.create` / `sections.update` / `sections.delete`
 - `vaults.export`
 - `audit.list`
 - `enrichment.doiMetadata` / `enrichment.enrichVault` / `enrichment.enrichItem`
@@ -458,17 +494,22 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 - Do not silently re-run bulk writes after ambiguous failure.
 - Prefer idempotent read flows and explicit write confirmations.
 - Vault and item deletes are permanent — warn before proceeding.
+- Vault archiving is permanent — warn before proceeding. There is no unarchive.
+- Section/featured item fields require vault owner permission — do not retry with the same key on `403 insufficient_vault_access`.
+- Relationship-suggestion scanning only ever proposes `cites` relations; never treat its output as a substitute for a user's request for a different relation type.
 
 ## 12. What exists now vs what is deferred
 
 ### Exists now (public API)
 
 - API key management routes
-- vault list / read / create / update / delete / visibility / shares
+- vault list / read / create / update / delete / archive / visibility / shares
 - item add / update / delete / upsert / import-preview
 - DOI, BibTeX, and URL import
 - tag CRUD + attach/detach
 - relation CRUD
+- section CRUD (owner-only writes) and item section/featured curation (owner-only)
+- citation-based relationship-suggestion scanning (client-side orchestration, `cites` relations only — no dedicated route)
 - search, stats, and changes feed
 - JSON and BibTeX export
 - audit log read endpoints
@@ -478,11 +519,16 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 
 ### Deferred
 
-- vault archiving and soft-delete
+- vault duplication/clone
+- vault soft-delete
 - item revision history and restore
 - item move/copy between vaults
 - webhooks and event delivery
 - audit log viewer in the frontend
+
+### Never (not deferred — permanent by design)
+
+- vault unarchiving, under any name
 
 ## 13. Acceptance criteria
 
