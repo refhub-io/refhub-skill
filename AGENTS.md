@@ -136,8 +136,10 @@ Notes:
 
 Account-scoped, not vault-scoped, until `accept` files an item into one.
 
+**Availability:** the backend route family (`.netlify#41`) and the CLI commands below (`refhub-cli#21`) are still open PRs, not yet deployed/released as of this writing. Confirm `refhub inbox --help` actually lists these (or that `/inbox` doesn't 404) before relying on this section.
+
 ```
-GET    /inbox                    # list pending items, ordered by sort_order then created_at (vaults:read)
+GET    /inbox?page=&limit=       # list pending items, ordered by sort_order then created_at; limit defaults 50, max 200 (vaults:read)
 POST   /inbox                    # capture: { source_type: "doi"|"bibtex"|"manual", source_ref?, parsed_fields? } (vaults:write)
 POST   /inbox/:itemId/accept     # file into a vault: { vault_id, tag_ids? } (vaults:write + editor on vault_id)
 POST   /inbox/:itemId/reject     # discard — no undo (vaults:write)
@@ -148,11 +150,14 @@ DELETE /inbox/:itemId            # hard delete regardless of status — no undo 
 
 Notes:
 - capture body by source: `{ source_type: "doi", source_ref: "<doi>" }` · `{ source_type: "bibtex", source_ref: "<bibtex string>" }` (bulk — one item per entry, response `data` is an array) · `{ source_type: "manual", parsed_fields: { title } }`
-- `accept` response: `{ data: { vault_publication_id, publication_id } }`; atomically creates the publication, files it into the vault, attaches tags, marks the item accepted
+- bibtex capture inserts entries one at a time with no idempotency key — a failure partway through leaves earlier entries already created; check `GET /inbox` before retrying the same content
+- `accept` response: `{ data: { vault_publication_id, publication_id } }`; atomically creates the publication, files it into the vault, attaches tags, marks the item accepted — but only attaches tags belonging to the target vault (or the caller's own personal tags); a tag from a different vault is silently dropped, not an error
+- always confirm the target `vault_id` with the user before calling accept, even when `suggested_vault_id` is set — treat it only as a candidate to present, never as a default to act on
 - `merge` only works when the item already has `duplicate_of_publication_id` set — otherwise `409 no_duplicate_target`
+- `accept`/`reject`/`merge`/`postpone` all return `409 item_not_pending` once the item is no longer `pending`
 - `reject`/`merge`/`delete` don't need editor access on any vault (there isn't one yet); `accept` is the one call that checks vault permission, against `vault_id` in the body
 - a vault-restricted key can freely list/capture/reject/merge/postpone/delete inbox items regardless of its vault restriction, but `accept` still enforces it against `vault_id`
-- CLI: `refhub inbox list` · `refhub inbox capture doi <doi>` · `refhub inbox capture bibtex (--bibtex <string> | --file <path>)` · `refhub inbox capture manual --title <title>` · `refhub inbox accept <itemId> --vault <id> [--tags <id,id>]` · `refhub inbox reject <itemId> --confirm` · `refhub inbox merge <itemId> --confirm` · `refhub inbox postpone <itemId>` · `refhub inbox delete <itemId> --confirm`
+- CLI: `refhub inbox list [--page <n>] [--limit <n>]` · `refhub inbox capture doi <doi>` · `refhub inbox capture bibtex (--bibtex <string> | --file <path>)` · `refhub inbox capture manual --title <title>` · `refhub inbox accept <itemId> --vault <id> [--tags <id,id>]` · `refhub inbox reject <itemId> --confirm` · `refhub inbox merge <itemId> --confirm` · `refhub inbox postpone <itemId>` · `refhub inbox delete <itemId> --confirm`
 
 ### Import
 

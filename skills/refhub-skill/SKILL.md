@@ -211,30 +211,34 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 
 A staging area for captured papers before they're filed into a vault. Unlike every other resource in this skill, inbox items are account-scoped, not vault-scoped, until `accept` files one — there is no `vault_id` on a pending item unless a suggestion set one.
 
+**Availability:** the backend route family (`.netlify#41`) and the `refhub-cli` commands below (`refhub-cli#21`) are still open PRs as of this writing, not yet deployed/released. Verify `refhub inbox --help` actually lists these commands (or that `/inbox` doesn't 404) before relying on this section — if neither is available yet, fall back to whatever the user's environment actually supports and say so.
+
 **Capture** — `vaults:write`
 1. `POST /inbox` with one of:
    - `{ source_type: "doi", source_ref: "<doi>" }`
    - `{ source_type: "bibtex", source_ref: "<bibtex string>" }` — bulk: creates one inbox item per BibTeX entry
    - `{ source_type: "manual", parsed_fields: { title: "<title>" } }`
 2. Response for `doi`/`manual` is a single item: `{ data: <inbox item> }`. Response for `bibtex` is an array: `{ data: [<inbox item>, ...] }` — do not assume `data` is always one shape across source types.
-3. CLI: `refhub inbox capture doi <doi>` / `refhub inbox capture bibtex (--bibtex <string> | --file <path>)` / `refhub inbox capture manual --title <title>`
+3. BibTeX capture inserts entries one at a time server-side with no idempotency key. If one entry fails partway through, earlier entries in that request are already created — check `GET /inbox` before retrying the same content, rather than resubmitting the whole batch blind.
+4. CLI: `refhub inbox capture doi <doi>` / `refhub inbox capture bibtex (--bibtex <string> | --file <path>)` / `refhub inbox capture manual --title <title>`
 
 **List pending items** — `vaults:read`
-1. `GET /inbox` → `{ data: [<inbox item>, ...] }`, ordered by `sort_order` then `created_at`
+1. `GET /inbox?page=&limit=` → `{ data: [<inbox item>, ...] }`, ordered by `sort_order` then `created_at`. Paginated: `limit` defaults to 50, max 200 — page through with `page` rather than assuming the first response is the whole queue.
 2. Only ever returns items with `status: "pending"` — accepted/rejected/merged items don't appear here, but their rows still exist (see Delete)
-3. CLI: `refhub inbox list`
+3. CLI: `refhub inbox list [--page <n>] [--limit <n>]`
 
 **Accept** — `vaults:write` + editor on the **target** vault
-1. Confirm the target `vault_id` with the user — or use `suggested_vault_id` on the item if RefHub already inferred one — before accepting. This is the one inbox action that creates permanent data rather than discarding or reordering it.
+1. Always confirm the target `vault_id` with the user before accepting, even when `suggested_vault_id` is set on the item — treat that field only as a candidate to present, never as a decision already made. This is the one inbox action that creates permanent data rather than discarding or reordering it.
 2. `POST /inbox/:itemId/accept` with `{ vault_id, tag_ids?: [] }`
 3. Atomically creates the canonical publication, files a copy into the target vault, attaches any given tags, and marks the inbox item `accepted` — response: `{ data: { vault_publication_id, publication_id } }`
-4. `404 inbox_item_not_found` if the item doesn't exist or isn't yours; `409 item_not_pending` if it's already been accepted, rejected, or merged
-5. If the key is vault-restricted, the restriction is enforced here against `vault_id` exactly like any other vault write — even though list/capture/reject/merge/postpone/delete above ignore vault restriction entirely, since there's no vault to check until this call
-6. CLI: `refhub inbox accept <itemId> --vault <id> [--tags <id,id>]`
+4. The RPC behind this only attaches tags belonging to the target vault (or the caller's own personal, non-vault-scoped tags) — a `tag_id` from a different vault is silently dropped, not an error. Resolve tag ids against the target vault before calling if completeness matters.
+5. `404 inbox_item_not_found` if the item doesn't exist or isn't yours; `409 item_not_pending` if it's already been accepted, rejected, or merged
+6. If the key is vault-restricted, the restriction is enforced here against `vault_id` exactly like any other vault write — even though list/capture/reject/merge/postpone/delete above ignore vault restriction entirely, since there's no vault to check until this call
+7. CLI: `refhub inbox accept <itemId> --vault <id> [--tags <id,id>]`
 
 **Reject** — `vaults:write`
 1. **Warn the user — there is no way to un-reject an item.**
-2. `POST /inbox/:itemId/reject` → `{ data: { id } }`
+2. `POST /inbox/:itemId/reject` → `{ data: { id } }`; `409 item_not_pending` if it's already been accepted, rejected, or merged
 3. The item's row is preserved with `status: "rejected"`; it just stops appearing in list
 4. CLI: `refhub inbox reject <itemId>` requires `--confirm`; exits 2 without it
 
@@ -246,7 +250,7 @@ A staging area for captured papers before they're filed into a vault. Unlike eve
 
 **Postpone** — `vaults:write`
 1. Moves the item to the back of the queue (`sort_order` past the current max) — harmless and fully reversible with another postpone, or by accepting/rejecting it
-2. `POST /inbox/:itemId/postpone` → `{ data: { id, sort_order } }`
+2. `POST /inbox/:itemId/postpone` → `{ data: { id, sort_order } }`; `409 item_not_pending` if it's already been accepted, rejected, or merged
 3. CLI: `refhub inbox postpone <itemId>`
 
 **Delete** — `vaults:write`
