@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [Semantic Versioning](https://semver.org/). History prior to
 1.1.0 was not tracked in this file.
 
+## [1.4.0] - 2026-09-13
+
+### Added
+- Documented the paper inbox (`GET/POST /inbox`, `POST /inbox/:itemId/accept|reject|merge|postpone`, `DELETE /inbox/:itemId`) across `AGENTS.md`, `SKILL.md`, `docs/spec.md`, and `docs/api-mapping.md`, matching `.netlify`'s new `/api/v1/inbox` route family (`refhub-cli` v1.7.0). Unlike every other documented resource, inbox items are account-scoped, not vault-scoped, until `accept` files one into a vault — every route except `accept` ignores the key's vault restriction entirely. `accept`/`reject`/`merge` fail with `409 item_not_pending` once an item is no longer pending; `merge` additionally requires a detected duplicate (`409 no_duplicate_target` otherwise). `reject`, `merge`, and `delete` are permanent — no un-reject/un-merge route exists.
+
 ## [1.3.0] - 2026-09-08
 
 ### Added

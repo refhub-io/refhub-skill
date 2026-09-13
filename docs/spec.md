@@ -72,6 +72,10 @@ No placeholder commands, no fake tool handlers, no pretend offline sync layer.
   - also carries `section_id`, `section_position`, `featured`, `featured_note` — vault-local curation fields for the public Codex page; setting any of them requires vault owner permission, not just editor
 - `canonical publication`
   - underlying `publications` row created alongside a vault item; shared across vaults
+- `inbox item`
+  - account-scoped, not vault-scoped — belongs to no vault until `accept` files it into one
+  - key fields: `id`, `status` (`pending`/`accepted`/`rejected`/`merged`), `source_type` (`doi`/`bibtex`/`manual`), `source_ref`, `parsed_fields`, `suggested_vault_id`, `duplicate_of_publication_id`, `filed_publication_id`, `sort_order`
+  - `list` only ever returns `pending` items; the other statuses are terminal and simply stop appearing there
 - `section`
   - vault-scoped grouping of items for display on the public Codex page; `name`, `description`, `position`; owner-only writes
 - `tag`
@@ -128,6 +132,7 @@ The skill supports all workflows already backed by the current public API:
 23. List, create, update, and delete curated vault sections (owner-only writes).
 24. Set an item's section and featured/highlighted state on a vault's public Codex page (owner-only, even when the key's general vault permission is editor).
 25. Scan a vault's items for citation-based relationship suggestions and create `cites` relations from the matches (client-side orchestration on the Semantic Scholar and relation endpoints — no dedicated route).
+26. Capture a paper into an account-scoped inbox (by DOI, BibTeX, or manual entry) and triage it later — accept into a vault, reject, merge into a detected duplicate, or postpone — without requiring a vault to be chosen at capture time.
 
 ## 6. Non-goals
 
@@ -428,6 +433,42 @@ Workflow:
 
 Skill expectation: support dry-run mode (report what would be created without writing). Only ever propose `relation_type: "cites"` — there is no basis in citation-graph data alone for `extends`/`contradicts`/etc.; those remain manual. CLI: `refhub relations scan --vault <id> [--item <id>] [--dry-run] [--limit <n>]`.
 
+### 7.30 Inbox capture and triage
+
+Intent: capture a paper the moment it's found, without stopping to decide which vault it belongs in — then triage the queue later.
+
+Account-scoped, not vault-scoped: an inbox item belongs to no vault until `accept` files one. Every route below except `accept` ignores vault restrictions on the key entirely, since there's no vault to check yet.
+
+**Capture** — `POST /api/v1/inbox`, requires `vaults:write`
+Body is one of:
+- `{ source_type: "doi", source_ref: "<doi>" }`
+- `{ source_type: "bibtex", source_ref: "<bibtex string>" }` — bulk, one inbox item created per BibTeX entry
+- `{ source_type: "manual", parsed_fields: { title: "<title>" } }`
+
+Response shape depends on `source_type`: a single object for `doi`/`manual`, an array for `bibtex`.
+
+**List** — `GET /api/v1/inbox`, requires `vaults:read`
+Returns only `pending` items, ordered by `sort_order` then `created_at`.
+
+**Accept** — `POST /api/v1/inbox/:itemId/accept`, requires `vaults:write` + editor on `vault_id`
+Body: `{ vault_id, tag_ids?: [] }`. Atomically creates the canonical publication, files a copy into the target vault, attaches any given tags, and marks the item `accepted`. Response: `{ data: { vault_publication_id, publication_id } }`. This is the one inbox action that creates permanent data — confirm the target vault with the user (or use `suggested_vault_id` as a suggestion, never as a silent default) before calling it. Vault restriction on the key IS enforced here, against `vault_id`.
+
+**Reject** — `POST /api/v1/inbox/:itemId/reject`, requires `vaults:write`
+Sets `status: "rejected"`. The row is preserved but stops appearing in `list`. No un-reject route exists — warn the user before proceeding.
+
+**Merge** — `POST /api/v1/inbox/:itemId/merge`, requires `vaults:write`
+Files the item as a duplicate of `duplicate_of_publication_id` rather than creating a new publication. Response: `{ data: { id, filed_publication_id } }`. Fails with `409 no_duplicate_target` if the item has no detected duplicate. No un-merge route exists — warn the user before proceeding.
+
+**Postpone** — `POST /api/v1/inbox/:itemId/postpone`, requires `vaults:write`
+Moves the item to the back of the queue (`sort_order` past the current max). Harmless and reversible with another postpone, or by accepting/rejecting the item. Response: `{ data: { id, sort_order } }`.
+
+**Delete** — `DELETE /api/v1/inbox/:itemId`, requires `vaults:write`
+Hard delete, regardless of the item's current status. No undo — warn the user before proceeding.
+
+`accept`, `reject`, and `merge` all fail with `409 item_not_pending` if the item isn't currently `pending`.
+
+Skill expectation: never accept/reject/merge/delete without explicit user confirmation — accept files real data, the other three discard it permanently; only postpone is harmless. CLI: `refhub inbox list` · `refhub inbox capture doi <doi>` · `refhub inbox capture bibtex (--bibtex <string> | --file <path>)` · `refhub inbox capture manual --title <title>` · `refhub inbox accept <itemId> --vault <id> [--tags <id,id>]` · `refhub inbox reject <itemId> --confirm` · `refhub inbox merge <itemId> --confirm` · `refhub inbox postpone <itemId>` · `refhub inbox delete <itemId> --confirm`.
+
 ## 8. Failure behavior
 
 The skill should normalize failures into a predictable structure.
@@ -476,6 +517,7 @@ Conceptual operations:
 - `tags.list` / `tags.create` / `tags.update` / `tags.delete` / `tags.attach` / `tags.detach`
 - `relations.list` / `relations.create` / `relations.update` / `relations.delete`
 - `relations.scanSuggestions`
+- `inbox.list` / `inbox.capture` / `inbox.accept` / `inbox.reject` / `inbox.merge` / `inbox.postpone` / `inbox.delete`
 - `sections.list` / `sections.create` / `sections.update` / `sections.delete`
 - `vaults.export`
 - `audit.list`
@@ -497,6 +539,8 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 - Vault archiving is permanent — warn before proceeding. There is no unarchive.
 - Section/featured item fields require vault owner permission — do not retry with the same key on `403 insufficient_vault_access`.
 - Relationship-suggestion scanning only ever proposes `cites` relations; never treat its output as a substitute for a user's request for a different relation type.
+- Inbox reject, merge, and delete are permanent — warn before proceeding. Only accept and postpone are safe to retry or reverse (accept by nature files real data rather than discarding anything; postpone only reorders).
+- Never guess a target `vault_id` for inbox accept; confirm it with the user even when `suggested_vault_id` is present.
 
 ## 12. What exists now vs what is deferred
 
@@ -510,6 +554,7 @@ These names are stable enough for the spec and can later be mapped onto CLI verb
 - relation CRUD
 - section CRUD (owner-only writes) and item section/featured curation (owner-only)
 - citation-based relationship-suggestion scanning (client-side orchestration, `cites` relations only — no dedicated route)
+- inbox capture and triage: `GET/POST /inbox`, `POST /inbox/:itemId/accept`, `/reject`, `/merge`, `/postpone`, `DELETE /inbox/:itemId` (account-scoped, API key)
 - search, stats, and changes feed
 - JSON and BibTeX export
 - audit log read endpoints

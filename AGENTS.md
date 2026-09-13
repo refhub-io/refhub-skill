@@ -7,6 +7,7 @@ Agent-facing instructions for operating [RefHub](https://refhub.io) through its 
 Apply whenever the user asks you to:
 - read, search, or export vault contents
 - add, update, delete, or import references
+- capture a paper into the inbox to file into a vault later, or triage pending inbox items (accept/reject/merge/postpone)
 - create or configure vaults (name, visibility, collaborators)
 - archive a vault (permanent, read-only lockdown — confirm with the user first; there is no unarchive)
 - manage tags or relations on vault items
@@ -82,6 +83,8 @@ If a credential is missing or has insufficient scope: stop, report clearly, ask 
 - **Never retry a bulk write after ambiguous failure** unless you have an `idempotency_key`.
 - **Never assume frontend capability equals API support.** UI features backed by direct Supabase may not have a public API route.
 - **Never proceed with vault or item deletion without explicit user confirmation.** Both are hard deletes with no undo.
+- **Never accept, reject, merge, or delete an inbox item without confirming with the user first.** `accept` permanently files real data; `reject`, `merge`, and `delete` permanently discard the item — none of the four can be undone. Only `postpone` is harmless.
+- **Never guess a target `vault_id` for inbox accept.** Treat `suggested_vault_id` as a suggestion to confirm, never as a silent default.
 - **Never send `visibility` or `public_slug` in `PATCH /vaults/:vaultId`.** Use the dedicated visibility endpoint.
 - **`tag_ids` on item update is a full replacement, not an append.** Make this explicit to the user before patching.
 
@@ -128,6 +131,28 @@ Notes:
 - Pass `idempotency_key` on bulk upsert for safe retries (TTL: 5 minutes)
 - Item delete removes the `vault_publications` row; the underlying `publications` row is preserved
 - `section_id`, `section_position`, `featured`, `featured_note` on item update are vault-local curation fields (grouping/highlighting for the public Codex page) and require **vault owner** access — an editor-scoped key gets `403 insufficient_vault_access` for these specific fields even though it can update every other item field. CLI: `refhub items update <itemId> --vault <id> [--section <sectionId> | --unset-section] [--featured | --unfeature] [--featured-note <text>]`
+
+### Inbox
+
+Account-scoped, not vault-scoped, until `accept` files an item into one.
+
+```
+GET    /inbox                    # list pending items, ordered by sort_order then created_at (vaults:read)
+POST   /inbox                    # capture: { source_type: "doi"|"bibtex"|"manual", source_ref?, parsed_fields? } (vaults:write)
+POST   /inbox/:itemId/accept     # file into a vault: { vault_id, tag_ids? } (vaults:write + editor on vault_id)
+POST   /inbox/:itemId/reject     # discard — no undo (vaults:write)
+POST   /inbox/:itemId/merge      # file as duplicate of duplicate_of_publication_id — no undo (vaults:write)
+POST   /inbox/:itemId/postpone   # move to back of queue — harmless (vaults:write)
+DELETE /inbox/:itemId            # hard delete regardless of status — no undo (vaults:write)
+```
+
+Notes:
+- capture body by source: `{ source_type: "doi", source_ref: "<doi>" }` · `{ source_type: "bibtex", source_ref: "<bibtex string>" }` (bulk — one item per entry, response `data` is an array) · `{ source_type: "manual", parsed_fields: { title } }`
+- `accept` response: `{ data: { vault_publication_id, publication_id } }`; atomically creates the publication, files it into the vault, attaches tags, marks the item accepted
+- `merge` only works when the item already has `duplicate_of_publication_id` set — otherwise `409 no_duplicate_target`
+- `reject`/`merge`/`delete` don't need editor access on any vault (there isn't one yet); `accept` is the one call that checks vault permission, against `vault_id` in the body
+- a vault-restricted key can freely list/capture/reject/merge/postpone/delete inbox items regardless of its vault restriction, but `accept` still enforces it against `vault_id`
+- CLI: `refhub inbox list` · `refhub inbox capture doi <doi>` · `refhub inbox capture bibtex (--bibtex <string> | --file <path>)` · `refhub inbox capture manual --title <title>` · `refhub inbox accept <itemId> --vault <id> [--tags <id,id>]` · `refhub inbox reject <itemId> --confirm` · `refhub inbox merge <itemId> --confirm` · `refhub inbox postpone <itemId>` · `refhub inbox delete <itemId> --confirm`
 
 ### Import
 
@@ -251,6 +276,8 @@ GET    /audit?since=&until=&per_page=&page=            # global (JWT only)
 | `404` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | Already exists (DOI import, duplicate relation). Surface the existing resource id. |
 | `409 vault_archived` | Target vault is archived (`editor`/`owner`-level operation attempted). Report this and stop — do not retry, do not attempt a workaround. Reads are unaffected; only writes are rejected. |
+| `409 item_not_pending` | Inbox item was already accepted, rejected, or merged. Report its current state; do not retry the same action. |
+| `409 no_duplicate_target` | Tried to `merge` an inbox item with no detected duplicate. Use `accept` instead, or ask the user which publication it duplicates. |
 | `410 raw_pdf_upload_removed` | Sent raw PDF bytes to `POST /vaults/:vaultId/items/:itemId/pdf`. Use the resumable flow instead (`/vaults/:vaultId/items/:itemId/pdf/session`, direct Drive `PUT`, then `/vaults/:vaultId/items/:itemId/pdf/complete`); do not retry the same request. |
 | `413 request_too_large` | Split batch requests. |
 | `429 rate_limit_exceeded` | Back off using `retry_after_seconds`. |

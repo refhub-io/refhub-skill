@@ -40,6 +40,7 @@ Agent-facing runtime skill for the RefHub public API (v2). Covers the full API s
 
 - reading or searching vault contents for analysis or synthesis
 - adding, updating, deleting, or importing references into a vault
+- capturing a paper into the inbox to file into a vault later, or triaging pending inbox items (accept/reject/merge/postpone)
 - creating or configuring vaults (name, visibility, collaborators)
 - archiving a vault (permanent, read-only lockdown — confirm with the user first)
 - managing tags or relations on vault items
@@ -203,6 +204,55 @@ Base URL: `https://refhub-api.netlify.app/api/v1`
 1. Use before committing a bulk upsert to show what would change
 2. `POST /vaults/:vaultId/items/import-preview` with `{ items: [...] }` — writes nothing
 3. Response: `{ data: { would_create: [...], would_update: [...], invalid: [...] } }`
+
+---
+
+### Inbox
+
+A staging area for captured papers before they're filed into a vault. Unlike every other resource in this skill, inbox items are account-scoped, not vault-scoped, until `accept` files one — there is no `vault_id` on a pending item unless a suggestion set one.
+
+**Capture** — `vaults:write`
+1. `POST /inbox` with one of:
+   - `{ source_type: "doi", source_ref: "<doi>" }`
+   - `{ source_type: "bibtex", source_ref: "<bibtex string>" }` — bulk: creates one inbox item per BibTeX entry
+   - `{ source_type: "manual", parsed_fields: { title: "<title>" } }`
+2. Response for `doi`/`manual` is a single item: `{ data: <inbox item> }`. Response for `bibtex` is an array: `{ data: [<inbox item>, ...] }` — do not assume `data` is always one shape across source types.
+3. CLI: `refhub inbox capture doi <doi>` / `refhub inbox capture bibtex (--bibtex <string> | --file <path>)` / `refhub inbox capture manual --title <title>`
+
+**List pending items** — `vaults:read`
+1. `GET /inbox` → `{ data: [<inbox item>, ...] }`, ordered by `sort_order` then `created_at`
+2. Only ever returns items with `status: "pending"` — accepted/rejected/merged items don't appear here, but their rows still exist (see Delete)
+3. CLI: `refhub inbox list`
+
+**Accept** — `vaults:write` + editor on the **target** vault
+1. Confirm the target `vault_id` with the user — or use `suggested_vault_id` on the item if RefHub already inferred one — before accepting. This is the one inbox action that creates permanent data rather than discarding or reordering it.
+2. `POST /inbox/:itemId/accept` with `{ vault_id, tag_ids?: [] }`
+3. Atomically creates the canonical publication, files a copy into the target vault, attaches any given tags, and marks the inbox item `accepted` — response: `{ data: { vault_publication_id, publication_id } }`
+4. `404 inbox_item_not_found` if the item doesn't exist or isn't yours; `409 item_not_pending` if it's already been accepted, rejected, or merged
+5. If the key is vault-restricted, the restriction is enforced here against `vault_id` exactly like any other vault write — even though list/capture/reject/merge/postpone/delete above ignore vault restriction entirely, since there's no vault to check until this call
+6. CLI: `refhub inbox accept <itemId> --vault <id> [--tags <id,id>]`
+
+**Reject** — `vaults:write`
+1. **Warn the user — there is no way to un-reject an item.**
+2. `POST /inbox/:itemId/reject` → `{ data: { id } }`
+3. The item's row is preserved with `status: "rejected"`; it just stops appearing in list
+4. CLI: `refhub inbox reject <itemId>` requires `--confirm`; exits 2 without it
+
+**Merge** — `vaults:write`
+1. Only valid when RefHub has already detected a duplicate for this item (`duplicate_of_publication_id` set) — **warn the user this cannot be undone**
+2. `POST /inbox/:itemId/merge` → `{ data: { id, filed_publication_id } }` — files the item as a duplicate of that existing publication rather than creating a new one
+3. `409 no_duplicate_target` if the item has no `duplicate_of_publication_id`; `409 item_not_pending` if it's already been resolved
+4. CLI: `refhub inbox merge <itemId>` requires `--confirm`; exits 2 without it
+
+**Postpone** — `vaults:write`
+1. Moves the item to the back of the queue (`sort_order` past the current max) — harmless and fully reversible with another postpone, or by accepting/rejecting it
+2. `POST /inbox/:itemId/postpone` → `{ data: { id, sort_order } }`
+3. CLI: `refhub inbox postpone <itemId>`
+
+**Delete** — `vaults:write`
+1. Removes the row outright, regardless of its current status (pending, accepted, rejected, or merged) — **warn the user this is a hard delete with no undo**
+2. `DELETE /inbox/:itemId` → `200 { data: { id } }`; `404 inbox_item_not_found` if it doesn't exist or isn't yours
+3. CLI: `refhub inbox delete <itemId>` requires `--confirm`; exits 2 without it
 
 ---
 
@@ -372,9 +422,11 @@ Requires any valid API key (data route for vault-scoped; JWT for global).
 | `403` | `missing_scope` | Key lacks required scope. Report which scope is needed. Do not attempt workaround. |
 | `403` | `insufficient_vault_access` | Key's permission on this vault is below what the operation needs (e.g. editor trying an owner-only operation like sections or `items update`'s section/featured fields). Report and stop; do not retry with the same key. |
 | `403` | `vault_not_allowed` | Key is vault-restricted and this vault isn't in its allowed set. Report and stop; do not try a different vault silently. |
-| `404` | `vault_not_found`, `item_not_found`, `tag_not_found`, `relation_not_found`, `section_not_found` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
+| `404` | `vault_not_found`, `item_not_found`, `tag_not_found`, `relation_not_found`, `section_not_found`, `inbox_item_not_found` | Resource doesn't exist. Verify the id. Do not create a replacement silently. |
 | `409` | (DOI import, duplicate relation) | Resource already exists. Surface the existing item id to the user. |
 | `409` | `vault_archived` | Target vault is archived; the attempted operation is `editor`/`owner`-level. Report and stop — do not retry, do not attempt a workaround. Reads are unaffected. |
+| `409` | `item_not_pending` | Inbox item was already accepted, rejected, or merged. Report the item's current state; do not retry the same action. |
+| `409` | `no_duplicate_target` | Tried to `merge` an inbox item with no detected duplicate (`duplicate_of_publication_id` unset). Use `accept` instead, or ask the user which publication it duplicates. |
 | `410` | `raw_pdf_upload_removed` | Sent raw PDF bytes to `POST /vaults/:vaultId/items/:itemId/pdf` — that route only accepts JSON `{ source_url }`. Switch to the resumable flow (`/vaults/:vaultId/items/:itemId/pdf/session` -> direct Drive `PUT` -> `/vaults/:vaultId/items/:itemId/pdf/complete`) instead; do not retry the same request. |
 | `413` | `request_too_large` | Payload too large. Split batch requests. |
 | `429` | `rate_limit_exceeded` | Back off. Use `retry_after_seconds` from the response. |
@@ -394,6 +446,8 @@ Every error response includes `error.code`, `error.message`, and `meta.request_i
 - **Never retry a bulk write after ambiguous failure** unless you have an `idempotency_key`.
 - **Never assume frontend capability equals API support.** Features in the RefHub UI backed by direct Supabase access may not have a public API route.
 - **Never proceed with vault or item deletion without explicit user confirmation.** Both are hard deletes with no undo.
+- **Never accept, reject, merge, or delete an inbox item without confirming with the user first.** `accept` permanently files real data; `reject`, `merge`, and `delete` permanently discard the pending item — none of the four can be undone (only `postpone` is harmless).
+- **Never guess a target `vault_id` for `inbox accept`.** Use `suggested_vault_id` on the item only as a suggestion to confirm with the user, never as a silent default.
 - **Never proceed with vault archiving without explicit user confirmation.** Permanent, no unarchive route, and it freezes items/tags/relations/shares read-only — not just the vault's own metadata.
 - **Never send `visibility` or `public_slug` in `PATCH /vaults/:vaultId`.** Use the dedicated visibility endpoint.
 - **`tag_ids` on item update is a full replacement, not an append.** Make this explicit to the user before patching.
