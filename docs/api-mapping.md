@@ -39,6 +39,15 @@ From `refhub-netlify` (`functions/api-v1.js` + `src/routes/`), the versioned API
 - `POST   /api/v1/vaults/:vaultId/items/upsert`             bulk upsert by DOI / title+year
 - `POST   /api/v1/vaults/:vaultId/items/import-preview`     dry-run upsert
 
+**Inbox** (account-scoped — no `:vaultId` until `accept` files an item into one; route family still on an open PR, `.netlify#41`, not yet deployed — verify availability before relying on it)
+- `GET    /api/v1/inbox?page=&limit=`                        paginated, `limit` default 50 max 200
+- `POST   /api/v1/inbox`                                    capture: `{ source_type: "doi"|"bibtex"|"manual", source_ref?, parsed_fields? }`
+- `POST   /api/v1/inbox/:itemId/accept`                     `{ vault_id, tag_ids? }`
+- `POST   /api/v1/inbox/:itemId/reject`
+- `POST   /api/v1/inbox/:itemId/merge`                      files as duplicate of `duplicate_of_publication_id`
+- `POST   /api/v1/inbox/:itemId/postpone`
+- `DELETE /api/v1/inbox/:itemId`                             hard delete regardless of status
+
 **Tags**
 - `GET    /api/v1/vaults/:vaultId/tags`
 - `POST   /api/v1/vaults/:vaultId/tags`
@@ -103,6 +112,13 @@ The CLI always uses the API-key `/session` + `/complete` routes, at any file siz
 | Bulk upsert items | `POST /api/v1/vaults/:vaultId/items/upsert` | `vaults:write` | editor |
 | Preview upsert (dry-run) | `POST /api/v1/vaults/:vaultId/items/import-preview` | `vaults:read` | viewer |
 | Search/filter items | `GET /api/v1/vaults/:vaultId/search` or `items` | `vaults:read` | viewer |
+| List pending inbox items | `GET /api/v1/inbox?page=&limit=` (paginated, default 50, max 200) | `vaults:read` | — (account-level) |
+| Capture into inbox | `POST /api/v1/inbox` | `vaults:write` | — (account-level) |
+| Accept inbox item into a vault | `POST /api/v1/inbox/:itemId/accept` | `vaults:write` | editor (on the `vault_id` in the body) |
+| Reject inbox item | `POST /api/v1/inbox/:itemId/reject` | `vaults:write` | — (account-level) |
+| Merge inbox item into its detected duplicate | `POST /api/v1/inbox/:itemId/merge` | `vaults:write` | — (account-level) |
+| Postpone inbox item | `POST /api/v1/inbox/:itemId/postpone` | `vaults:write` | — (account-level) |
+| Delete inbox item | `DELETE /api/v1/inbox/:itemId` | `vaults:write` | — (account-level) |
 | List tags | `GET /api/v1/vaults/:vaultId/tags` | `vaults:read` | viewer |
 | Create tag | `POST /api/v1/vaults/:vaultId/tags` | `vaults:write` | editor |
 | Update tag | `PATCH /api/v1/vaults/:vaultId/tags/:tagId` | `vaults:write` | editor |
@@ -170,6 +186,10 @@ Current scopes:
 | `items.upsert` | `vaults:write` |
 | `items.importPreview` | `vaults:read` |
 | `items.search` | `vaults:read` |
+| `inbox.list` | `vaults:read` |
+| `inbox.capture` | `vaults:write` |
+| `inbox.accept` | `vaults:write` |
+| `inbox.reject` / `merge` / `postpone` / `delete` | `vaults:write` |
 | `tags.list` | `vaults:read` |
 | `tags.create` / `update` / `delete` | `vaults:write` |
 | `tags.attach` / `detach` | `vaults:write` |
@@ -206,6 +226,11 @@ Current scopes:
 - Relationship-suggestion scanning only ever creates `relation_type: "cites"` — citation-graph data alone gives no basis for `extends`/`contradicts`/etc.
 - Section and item-featured writes require vault **owner** permission, not just editor — this is stricter than every other `vaults:write`/`vaults:admin` operation on the same endpoints, which check editor or owner respectively. `PATCH /vaults/:vaultId/items/:itemId` specifically runs a second, owner-level access check only when the body includes `section_id`/`section_position`/`featured`/`featured_note`.
 - Deleting a section unfiles its items (`section_id` → `null`) rather than deleting them.
+- Inbox items are account-scoped, not vault-scoped — every route except `accept` ignores vault restrictions on the key entirely, since there's no vault to check until `accept` supplies one.
+- `POST /api/v1/inbox` response shape depends on `source_type`: a single object for `doi`/`manual`, an array for `bibtex` (bulk — one inbox item per BibTeX entry). BibTeX capture inserts entries one at a time with no idempotency key, so a failure partway through a batch leaves earlier entries already created.
+- `accept`/`reject`/`merge`/`postpone` all fail with `409 item_not_pending` if the item isn't currently `pending` (already accepted, rejected, or merged). `merge` additionally fails with `409 no_duplicate_target` if the item has no `duplicate_of_publication_id`.
+- `accept` only attaches tags that belong to the target vault (or the caller's own personal, non-vault-scoped tags) — a `tag_id` from a different vault is silently dropped rather than erroring.
+- Rejecting, merging, or deleting an inbox item is permanent — there's no un-reject/un-merge, and delete removes the row outright regardless of its status. Accept is retry-safe (the RPC is atomic) but not reversible either — there's no un-accept.
 - DOI import calls Semantic Scholar internally; it will fail if `SEMANTIC_SCHOLAR_API_KEY` is not configured.
 - Agent Semantic Scholar routes live under `/semantic-scholar/*` and accept API keys with `vaults:read`; legacy root routes remain JWT-only for frontend compatibility.
 - Semantic Scholar rate limit: 1 request per second. The enrichment workflow must sleep between calls when processing multiple items.
